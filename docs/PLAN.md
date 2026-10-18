@@ -136,6 +136,13 @@
   5. Delete the SQS message.
 - **Terminal statuses:** COMPLETE, SKIPPED, ERROR and CANCELLED all set `completedAt`, which starts the TTL.
 - **Crash at any point:** the message reappears after the visibility timeout, and the handler reruns safely.
+- **Fan-out recovery (the scaler owns it):** once the `requests` doc is persisted, finishing the request is Helios's job, never the client's.
+  - The scaler's 1-minute schedule also runs the fan-out resume for every request with `status: IN_PROGRESS`, no `enqueuedAt`, and `createdAt` older than `FANOUT_RESUME_AFTER_SEC`. Fan-out is idempotent, so this is safe.
+  - This needs a partial index on `{createdAt: 1}` where `enqueuedAt` doesn't exist.
+- **Client-facing errors:**
+  - `POST /encode` returns 202 with the request id as soon as the request doc is written, even if a later fan-out write (items, SQS) fails; the resumer completes it.
+  - The API returns `503 Service Unavailable` ("can't process right now, try again later") only when the request can't be persisted at all, i.e. a system outage.
+  - The SDK still generates a `requestId` internally and reuses it on network retries for idempotency, invisibly to the user.
 - **DLQ consumer Lambda:** marks the item ERROR (or SKIPPED for optional AI steps), releases dependents according to policy, `$pull`s the item from `pendingItems`, and fires the error callback.
 - **SIGTERM (Fargate):** set the message visibility to 0 so another worker picks it up immediately.
 - The Lambda entrypoint runs the same handler. If it returns an error or times out, the message isn't deleted, so SQS redelivers it and then redrives it to Fargate.
@@ -525,3 +532,4 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **2026-10-17:** Preset refinements: a child profile must be `stills` and not default; every default profile must be `video` or `image`.
 - **2026-10-17:** LocalStack pinned to `localstack/localstack:4.14` (compose standalone profile and the shared instance).
 - **2026-10-17:** `SQS_FAIR_QUEUES` config flag. The shared LocalStack was upgraded 4.5 → 4.14 (`localstack:4`; `latest` now requires a paid auth token), so it is `true` locally and on AWS.
+- **2026-10-17:** stuck fan-outs are resumed by the scaler (1-minute schedule, `FANOUT_RESUME_AFTER_SEC`); the API returns 202 once the request is persisted and 503 only when it cannot be persisted. Build in step 4 (scaler); the index lands with the step 2 model work.

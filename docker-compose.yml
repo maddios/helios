@@ -13,3 +13,13 @@ services:
     profiles: ["standalone"]
     ports:
       - "27117:27017"
+  helios-worker:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      target: test
+    init: true
+    network_mode: host
+    volumes:
+      - ./local:/app/local:ro
+    command: ["npx", "tsx", "local/runWorker.ts"]

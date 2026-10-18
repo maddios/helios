@@ -7,6 +7,7 @@ import { mediaAssetIndexes } from "./mediaAssets";
 import { requestIndexes } from "./requests";
 import { pipelineItemIndexes } from "./pipelineItems";
 import { jobReportIndexes } from "./jobReports";
+import { usageDailyIndexes } from "./usageDaily";
 import { transcriptIndexes } from "./transcripts";
 import { sceneAnalysisIndexes } from "./sceneAnalyses";
 
@@ -17,6 +18,7 @@ export * from "./mediaAssets";
 export * from "./requests";
 export * from "./pipelineItems";
 export * from "./jobReports";
+export * from "./usageDaily";
 export * from "./transcripts";
 export * from "./sceneAnalyses";
 
@@ -28,6 +30,7 @@ const indexesByCollection: Record<string, IndexDescription[]> = {
 	requests: requestIndexes,
 	pipeline_items: pipelineItemIndexes,
 	job_reports: jobReportIndexes,
+	usage_daily: usageDailyIndexes,
 	transcripts: transcriptIndexes,
 	scene_analyses: sceneAnalysisIndexes
 };

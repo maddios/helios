@@ -6,18 +6,23 @@
 	},
 	"workspaces": [
 		"contracts",
-		"core"
+		"core",
+		"worker"
 	],
 	"scripts": {
 		"test": "jest",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"depcheck": "depcruise contracts/src core/src local --config .dependency-cruiser.js",
+		"depcheck": "depcruise contracts/src core/src worker/src local --config .dependency-cruiser.js",
 		"lint": "npm run typecheck && npm run depcheck",
 		"format": "prettier --write .",
 		"local:bootstrap": "tsx local/bootstrap.ts",
 		"test:local": "jest -c jest.local.config.js",
 		"local:standalone:up": "docker compose --profile standalone up -d",
-		"local:standalone:down": "docker compose --profile standalone down"
+		"local:standalone:down": "docker compose --profile standalone down",
+		"local:fixtures": "tsx local/fixtures.ts",
+		"test:golden": "jest -c jest.golden.config.js",
+		"build:worker": "esbuild worker/src/main.ts --bundle --platform=node --target=node22 --format=cjs --external:sharp --outdir=dist",
+		"test:golden:docker": "docker build -t helios-worker:test --target test -f worker/Dockerfile . && docker run --rm -v \"$PWD/local:/app/local:ro\" -v \"$PWD/.cache/fixtures:/app/.cache/fixtures:ro\" helios-worker:test"
 	},
 	"devDependencies": {
 		"@aws-sdk/client-s3": "^3.1152.0",
@@ -25,6 +30,7 @@
 		"@types/node": "^22.0.0",
 		"aws-sdk-client-mock": "^4.1.0",
 		"dependency-cruiser": "^18.6.0",
+		"esbuild": "^0.28.2",
 		"jest": "^30.5.2",
 		"mongodb-memory-server": "^11.3.0",
 		"prettier": "^3.9.10",

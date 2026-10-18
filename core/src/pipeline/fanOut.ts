@@ -2,7 +2,6 @@ import { randomUUID } from "crypto";
 import { MongoBulkWriteError, MongoServerError } from "mongodb";
 import type { Preset, PostProcessRequest, RequestMode, ResolvedPostProcess } from "@helios/contracts";
 import { config } from "../config";
-import { toMessageAttributes } from "../logger";
 import {
 	mediaAssets,
 	pipelineItems,
@@ -12,6 +11,7 @@ import {
 	type PipelineRequest
 } from "../models";
 import { queueFor } from "../queue";
+import { itemMessage } from "./itemMessage";
 import { planItems } from "./planItems";
 import { resolvePostProcess } from "./resolvePostProcess";
 import type { ItemMessage, PlannedItem } from "./types";
@@ -137,7 +137,7 @@ async function launch(request: PipelineRequest, plan: PlannedItem[], now: Date):
 		await updateAsset(request, now);
 	}
 	const queued = await pipelineItems().find({ requestId: request._id, status: "QUEUED" }).toArray();
-	await enqueueItems(request, queued);
+	await enqueueItems(queued);
 	return markEnqueued(request._id, now);
 }
 
@@ -152,10 +152,12 @@ function buildItemDocs(request: PipelineRequest, plan: PlannedItem[], now: Date)
 		queue: item.queue,
 		priority: item.priority,
 		status: item.status,
-		pendingDeps: item.dependsOn.map((key) => itemId(request._id, key)),
+		pendingDeps: item.dependsOn.map((dep) => itemId(request._id, dep.key)),
+		requiredDeps: item.dependsOn.filter((dep) => dep.required).map((dep) => itemId(request._id, dep.key)),
 		dependents: plan
-			.filter((other) => other.dependsOn.includes(item.key))
+			.filter((other) => other.dependsOn.some((dep) => dep.key === item.key))
 			.map((other) => itemId(request._id, other.key)),
+		usage: [],
 		attempts: 0,
 		progress: 0,
 		...(item.status === "SKIPPED" && { completedAt: now }),
@@ -198,25 +200,11 @@ async function updateAsset(request: PipelineRequest, now: Date): Promise<void> {
 	}
 }
 
-async function enqueueItems(request: PipelineRequest, items: PipelineItem[]): Promise<void> {
-	const fairQueues = config().SQS_FAIR_QUEUES;
+async function enqueueItems(items: PipelineItem[]): Promise<void> {
 	const queueNames = [...new Set(items.map((item) => item.queue))];
 	await Promise.all(
 		queueNames.map((name) =>
-			queueFor<ItemMessage>(name).sendBatch(
-				items
-					.filter((item) => item.queue === name)
-					.map((item) => ({
-						body: { itemId: item._id },
-						...(fairQueues && { groupId: request.accountId }),
-						attributes: toMessageAttributes({
-							accountId: request.accountId,
-							requestId: request._id,
-							itemId: item._id,
-							assetId: request.assetId
-						})
-					}))
-			)
+			queueFor<ItemMessage>(name).sendBatch(items.filter((item) => item.queue === name).map(itemMessage))
 		)
 	);
 }

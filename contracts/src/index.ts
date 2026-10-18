@@ -6,5 +6,6 @@ export * from "./profile";
 export * from "./preset";
 export * from "./outputs";
 export * from "./usage";
+export * from "./resourceUnits";
 export * from "./transcript";
 export * from "./scenes";

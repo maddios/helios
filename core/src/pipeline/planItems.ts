@@ -1,6 +1,6 @@
 import type { EncodingProfile, Preset, RequestMode, ResolvedPostProcess, SourceMetadata } from "@helios/contracts";
 import { isShortSource, routeItem } from "./route";
-import type { PlannedItem, Thresholds } from "./types";
+import type { Dependency, PlannedItem, Thresholds } from "./types";
 
 export const AI_ITEM_PRIORITY = { transcribe: 20, scenes: 30 } as const;
 
@@ -72,9 +72,9 @@ function sceneItem(
 	transcribeItems: PlannedItem[],
 	isShort: boolean
 ): PlannedItem {
-	const dependsOn = [
-		...(mode === "postProcess" ? [] : defaultProfileKeys(preset, source)),
-		...transcribeItems.filter((item) => item.status !== "SKIPPED").map((item) => item.key)
+	const dependsOn: Dependency[] = [
+		...(mode === "postProcess" ? [] : defaultProfileKeys(preset, source).map((key) => ({ key, required: true }))),
+		...transcribeItems.filter((item) => item.status !== "SKIPPED").map((item) => ({ key: item.key, required: false }))
 	];
 	return {
 		key: "scenes",

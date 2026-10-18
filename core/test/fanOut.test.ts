@@ -126,8 +126,12 @@ function plannedItemDocs(requestId: string, plan: PlannedItem[]): PipelineItem[]
 		queue: item.queue,
 		priority: item.priority,
 		status: item.status,
-		pendingDeps: item.dependsOn.map(itemId),
-		dependents: plan.filter((other) => other.dependsOn.includes(item.key)).map((other) => itemId(other.key)),
+		pendingDeps: item.dependsOn.map((dep) => itemId(dep.key)),
+		requiredDeps: item.dependsOn.filter((dep) => dep.required).map((dep) => itemId(dep.key)),
+		dependents: plan
+			.filter((other) => other.dependsOn.some((dep) => dep.key === item.key))
+			.map((other) => itemId(other.key)),
+		usage: [],
 		attempts: 0,
 		progress: 0,
 		createdAt: new Date()

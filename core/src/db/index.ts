@@ -1,4 +1,4 @@
-import { Db, MongoClient } from "mongodb";
+import { Db, MongoClient, type ClientSession } from "mongodb";
 
 const DB_NAME = "helios";
 
@@ -16,6 +16,18 @@ export function db(): Db {
 		throw new Error("Database is not initialized");
 	}
 	return client.db(DB_NAME);
+}
+
+export async function withTransaction(work: (session: ClientSession) => Promise<void>): Promise<void> {
+	if (!client) {
+		throw new Error("Database is not initialized");
+	}
+	const session = client.startSession();
+	try {
+		await session.withTransaction(work);
+	} finally {
+		await session.endSession();
+	}
 }
 
 export async function closeDb(): Promise<void> {

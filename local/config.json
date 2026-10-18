@@ -10,5 +10,21 @@
 	"lambdaMaxDurationSec": 180,
 	"lambdaMaxSourceBytes": 524288000,
 	"logLevel": "debug",
-	"sqsFairQueues": true
+	"sqsFairQueues": true,
+	"worker": {
+		"ffmpegPath": "ffmpeg",
+		"ffprobePath": "ffprobe",
+		"workDir": ".cache/work",
+		"workerTier": "fargate",
+		"heartbeatSec": 10,
+		"visibilityExtensionSec": 60,
+		"workerIdleTimeoutSec": 60,
+		"idleExit": false,
+		"workerMemoryMb": 2048,
+		"workerVcpu": 1,
+		"workerSpot": false,
+		"leaseSec": 30,
+		"sourceUrlTtlSec": 3600
+	},
+	"sourceBucket": "helios-local-sources"
 }

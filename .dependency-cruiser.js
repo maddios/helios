@@ -21,6 +21,13 @@ module.exports = {
 			to: { path: "^core/src/(?!index\\.ts$|[^/]+/index\\.ts$)" }
 		},
 		{
+			name: "worker-imports-core-via-index-only",
+			comment: "worker/ imports core only through core/src/index.ts or a module's index.ts",
+			severity: "error",
+			from: { path: "^worker/" },
+			to: { path: "^core/src/(?!index\\.ts$|[^/]+/index\\.ts$)" }
+		},
+		{
 			name: "contracts-is-a-leaf",
 			severity: "error",
 			from: { path: "^contracts/" },

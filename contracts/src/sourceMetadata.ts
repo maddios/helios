@@ -6,8 +6,8 @@ export type SourceType = z.infer<typeof SourceTypeSchema>;
 export const VideoSourceMetadataSchema = z.object({
 	type: z.literal("video"),
 	sizeBytes: z.int().describe("Source file size in bytes"),
-	width: z.int().describe("Source width in pixels"),
-	height: z.int().describe("Source height in pixels"),
+	width: z.int().describe("Display width in pixels, after rotation"),
+	height: z.int().describe("Display height in pixels, after rotation"),
 	durationSec: z.number().positive().describe("Source duration in seconds"),
 	fps: z.number().positive().describe("Source frame rate"),
 	videoCodec: z.string().describe("Source video codec name"),
@@ -20,8 +20,8 @@ export type VideoSourceMetadata = z.infer<typeof VideoSourceMetadataSchema>;
 export const ImageSourceMetadataSchema = z.object({
 	type: z.literal("image"),
 	sizeBytes: z.int().describe("Source file size in bytes"),
-	width: z.int().describe("Source width in pixels"),
-	height: z.int().describe("Source height in pixels"),
+	width: z.int().describe("Display width in pixels, after rotation"),
+	height: z.int().describe("Display height in pixels, after rotation"),
 	hasAudio: z.literal(false).describe("Images never contain an audio stream"),
 	probe: z.unknown().optional().describe("Raw ffprobe JSON output")
 });

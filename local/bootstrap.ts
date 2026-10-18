@@ -8,29 +8,35 @@ import {
 import { dlqName, fullQueueName, isFifoName, queueTopology } from "@helios/core";
 import { applyLocalEnv, loadLocalConfig } from "./loadConfig";
 
-const VISIBILITY_TIMEOUT_SEC = "30";
-
 export interface BootstrapResult {
 	created: string[];
 	updated: string[];
 }
 
-export async function bootstrap(prefix: string, bucket: string): Promise<BootstrapResult> {
+export async function bootstrap(prefix: string, buckets: string[]): Promise<BootstrapResult> {
 	const local = loadLocalConfig();
+	const visibilityTimeout = String(local.worker.visibilityExtensionSec);
 	const sqs = new SQSClient({ region: local.awsRegion, endpoint: local.awsEndpoint });
 	const s3 = new S3Client({ region: local.awsRegion, endpoint: local.awsEndpoint, forcePathStyle: true });
 	const result: BootstrapResult = { created: [], updated: [] };
 
 	const arnByQueue = new Map<string, string>();
 	for (const queue of queueTopology.filter((spec) => spec.redrive.target === "dlq")) {
-		const dlqArn = await ensureQueue(sqs, fullQueueName(prefix, dlqName(queue.name)), undefined, result);
+		const dlqArn = await ensureQueue(
+			sqs,
+			fullQueueName(prefix, dlqName(queue.name)),
+			undefined,
+			result,
+			visibilityTimeout
+		);
 		arnByQueue.set(
 			queue.name,
 			await ensureQueue(
 				sqs,
 				fullQueueName(prefix, queue.name),
 				redrivePolicy(dlqArn, queue.redrive.maxReceiveCount),
-				result
+				result,
+				visibilityTimeout
 			)
 		);
 	}
@@ -43,12 +49,15 @@ export async function bootstrap(prefix: string, bucket: string): Promise<Bootstr
 			sqs,
 			fullQueueName(prefix, queue.name),
 			redrivePolicy(targetArn, queue.redrive.maxReceiveCount),
-			result
+			result,
+			visibilityTimeout
 		);
 	}
 
-	if (await ensureBucket(s3, bucket, local.awsRegion)) {
-		result.created.push(bucket);
+	for (const bucket of buckets) {
+		if (await ensureBucket(s3, bucket, local.awsRegion)) {
+			result.created.push(bucket);
+		}
 	}
 	return result;
 }
@@ -61,7 +70,8 @@ async function ensureQueue(
 	sqs: SQSClient,
 	name: string,
 	redrive: string | undefined,
-	result: BootstrapResult
+	result: BootstrapResult,
+	visibilityTimeout: string
 ): Promise<string> {
 	const { QueueUrl } = await sqs.send(
 		new CreateQueueCommand({
@@ -74,7 +84,7 @@ async function ensureQueue(
 		new SetQueueAttributesCommand({
 			QueueUrl,
 			Attributes: {
-				VisibilityTimeout: VISIBILITY_TIMEOUT_SEC,
+				VisibilityTimeout: visibilityTimeout,
 				...(redrive !== undefined && { RedrivePolicy: redrive })
 			}
 		})
@@ -109,7 +119,7 @@ async function ensureBucket(s3: S3Client, bucket: string, region: string): Promi
 if (require.main === module) {
 	const local = loadLocalConfig();
 	applyLocalEnv(local, { e2e: false });
-	bootstrap(local.queuePrefix, local.mediaBucket)
+	bootstrap(local.queuePrefix, [local.mediaBucket, local.sourceBucket])
 		.then((result) => {
 			for (const name of result.created) {
 				console.log(`created ${name}`);

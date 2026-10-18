@@ -1,6 +1,12 @@
 import { z } from "zod";
 import type { IndexDescription } from "mongodb";
-import { ItemKindSchema, ItemStatusSchema, RequestStatusSchema, UsageSchema } from "@helios/contracts";
+import {
+	ItemKindSchema,
+	ItemStatusSchema,
+	RequestStatusSchema,
+	ResourceUnitsSchema,
+	UsageSummarySchema
+} from "@helios/contracts";
 import { db } from "../db";
 
 export const JobReportSchema = z.object({
@@ -15,18 +21,16 @@ export const JobReportSchema = z.object({
 			kind: ItemKindSchema,
 			profile: z.string().optional(),
 			status: ItemStatusSchema,
-			usage: UsageSchema.optional(),
 			error: z.string().optional()
 		})
 	),
-	usage: UsageSchema,
+	usage: UsageSummarySchema,
+	resourceUnits: ResourceUnitsSchema,
+	unitsRecordedAt: z.date().optional(),
 	createdAt: z.date()
 });
 export type JobReport = z.infer<typeof JobReportSchema>;
 
 export const jobReports = () => db().collection<JobReport>("job_reports");
 
-export const jobReportIndexes: IndexDescription[] = [
-	{ key: { requestId: 1 }, unique: true },
-	{ key: { accountId: 1, createdAt: -1 } }
-];
+export const jobReportIndexes: IndexDescription[] = [{ key: { accountId: 1, createdAt: -1 } }];

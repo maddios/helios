@@ -50,6 +50,7 @@ function toReceived<T>(message: Message, body: T): ReceivedMessage<T> {
 				value.StringValue === undefined ? [] : [[name, value.StringValue]]
 			)
 		),
+		groupId: message.Attributes?.MessageGroupId,
 		receiveCount: Number(message.Attributes!.ApproximateReceiveCount)
 	};
 }
@@ -91,7 +92,8 @@ export class SqsQueue<T> implements Queue<T> {
 	async poll(
 		maxMessages: number,
 		waitTimeSeconds: number,
-		visibilityTimeoutSeconds?: number
+		visibilityTimeoutSeconds?: number,
+		signal?: AbortSignal
 	): Promise<ReceivedMessage<T>[]> {
 		const { Messages = [] } = await this.client.send(
 			new ReceiveMessageCommand({
@@ -100,8 +102,9 @@ export class SqsQueue<T> implements Queue<T> {
 				WaitTimeSeconds: waitTimeSeconds,
 				VisibilityTimeout: visibilityTimeoutSeconds,
 				MessageAttributeNames: ["All"],
-				MessageSystemAttributeNames: ["ApproximateReceiveCount"]
-			})
+				MessageSystemAttributeNames: ["ApproximateReceiveCount", "MessageGroupId"]
+			}),
+			{ abortSignal: signal }
 		);
 		return Messages.flatMap((message) => {
 			const body = parseBody<T>(message);

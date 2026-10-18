@@ -62,7 +62,10 @@ describe("planItems", () => {
 		expect(items.find((item) => item.key === "stills")).toBeUndefined();
 		expect(byKey(items, "scenes")).toMatchObject({
 			status: "BLOCKED",
-			dependsOn: ["mp4_360", "transcribe"],
+			dependsOn: [
+				{ key: "mp4_360", required: true },
+				{ key: "transcribe", required: false }
+			],
 			priority: 30
 		});
 		expect(byKey(items, "transcribe")).toMatchObject({ status: "QUEUED", priority: 20, dependsOn: [] });
@@ -89,13 +92,16 @@ describe("planItems", () => {
 		const items = plan({ source: video({ hasAudio: false }) });
 		expect(items.map((item) => item.key)).not.toContain("audio");
 		expect(byKey(items, "transcribe").status).toBe("SKIPPED");
-		expect(byKey(items, "scenes")).toMatchObject({ status: "BLOCKED", dependsOn: ["mp4_360"] });
+		expect(byKey(items, "scenes")).toMatchObject({
+			status: "BLOCKED",
+			dependsOn: [{ key: "mp4_360", required: true }]
+		});
 	});
 
 	it("plans only the image item and scenes for an image source", () => {
 		const items = plan({ source: image });
 		expect(items.map((item) => item.key)).toEqual(["image", "scenes"]);
-		expect(byKey(items, "scenes")).toMatchObject({ status: "BLOCKED", dependsOn: ["image"] });
+		expect(byKey(items, "scenes")).toMatchObject({ status: "BLOCKED", dependsOn: [{ key: "image", required: true }] });
 	});
 
 	it("routes an image source to lambda", () => {
@@ -142,7 +148,10 @@ describe("planItems", () => {
 	it("plans only AI items in postProcess mode", () => {
 		const items = plan({ mode: "postProcess" });
 		expect(items.map((item) => item.key)).toEqual(["transcribe", "scenes"]);
-		expect(byKey(items, "scenes")).toMatchObject({ status: "BLOCKED", dependsOn: ["transcribe"] });
+		expect(byKey(items, "scenes")).toMatchObject({
+			status: "BLOCKED",
+			dependsOn: [{ key: "transcribe", required: false }]
+		});
 	});
 
 	it("queues scenes without a default dependency when transcribe is disabled in postProcess mode", () => {

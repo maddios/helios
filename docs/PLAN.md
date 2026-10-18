@@ -20,7 +20,7 @@
   - **API:** Express on ECS via Copilot.
   - **Analysis Lambda:** ffprobe over a presigned URL → fan-out.
   - **State in Mongo only.** The `helios` DB lives on bella's existing per-env cluster. No DynamoDB; see "Pipeline state & queueing".
-  - **Queues: SQS priority queues.** Visibility timeout = lease, `ChangeMessageVisibility` = heartbeat, `maxReceiveCount` + DLQ = retries.
+  - **Queues: SQS priority queues.** The Mongo heartbeat lease (`LEASE_SEC`) is the item's lock. SQS visibility is at least `LEASE_SEC` and is extended by the heartbeat (`ChangeMessageVisibility` = `VISIBILITY_EXTENSION_SEC`). `maxReceiveCount` + DLQ = retries.
   - **Compute is hybrid; see "Compute tiers".** A Lambda tier handles the primary rendition + its stills + AI steps for short sources. Fargate workers handle everything else. Both run the same container image and handlers.
   - **Callbacks:** FIFO SQS → callback Lambda (HMAC, retries, DLQ).
   - **Images:** CloudFront + a **regional image Lambda origin** (us-east-2, `sharp`, Function URL + OAC). Not Lambda@Edge.
@@ -127,13 +127,22 @@
   - A `CANCELLED` item/request status and `DELETE /requests/:id`.
   - BLOCKED/QUEUED items flip immediately. Workers check status before starting and on each heartbeat, then abort.
   - The completion handler treats CANCELLED as terminal.
-- **Worker claim:** a worker claims an item with `findOneAndUpdate({_id, $or:[{status:QUEUED}, {status:IN_PROGRESS, messageId}]})`, setting `status: IN_PROGRESS` and `messageId`. A duplicate delivery matches neither branch, so it is acked without doing any work. The claim also requires the request not CANCELLED, so items inserted by a fan-out resume racing a cancel never run.
+- **Worker claim:** see `claimItem` under "Step 2 design". A claim succeeds only when the item is QUEUED, BLOCKED with no pending dependencies, or IN_PROGRESS with a stale lease. A redelivery while the lease is fresh is `busy` and reports the holder's `messageId`. A different messageId is acked, because the holder's own message covers crash recovery. The same messageId is left unacked. Concurrent deliveries yield exactly one claim. A CANCELLED request is handled before the claim, as described under Completion handler.
+- **Dependency edges are required or optional.** `pendingDeps` lists every dependency. `requiredDeps` is the subset that must complete: scenes requires the default encode item and treats transcribe as optional.
+  - When a dependency settles ERROR, SKIPPED or CANCELLED and it is in `requiredDeps`, the dependent is settled SKIPPED with `error: "dependency <depId> <status>"` through the same `completeItem` path. That cascades recursively and is idempotent.
+  - An optional dependency that fails is released normally, so scenes runs without the transcript.
+  - COMPLETE always releases normally.
 - **Completion handler (idempotent; the SQS message is deleted last):**
-  1. `$set` the item to COMPLETE plus its output. If it is already COMPLETE, skip the work and rerun only the handoff.
-  2. For each dependent: `$pull` the completed id from its `pendingDeps`, then `findOneAndUpdate({_id, status:BLOCKED, pendingDeps:{$size:0}} → QUEUED)`. Only the winner sends it to SQS. Each worker also applies the never-upscale rule `min(height, sourceH)` before encoding.
-  3. Enqueue the per-item callback.
-  4. `findOneAndUpdate({_id: requestId, pendingItems: itemId}, {$pull: {pendingItems: itemId}}, {returnDocument: after})`. The caller that leaves `pendingItems` empty finalizes: request status, job report, final callback.
-  5. Delete the SQS message.
+  1. Settle the item from any non-terminal status (BLOCKED, QUEUED, IN_PROGRESS) to the terminal status. The settle stores `output` (`{ assetOutputs, activeStill }`) on the item, `$push`es the attempt's usage, `$unset`s `error` when COMPLETE, sets `error` otherwise, and sets `completedAt`. A late or losing completion matches nothing.
+  2. Re-read the item and run the handoff from its stored status and output, never from the input.
+  3. Write asset outputs only when the stored status is COMPLETE, from the stored `output`, with the filter `{_id, accountId, version: {$lte: request.assetVersion}}`. A non-match is not an error. An older request therefore never overwrites a newer re-encode's outputs.
+  4. Release dependents: required failures cascade, anything else does `$pull` pendingDeps and then send-then-flip (BLOCKED to QUEUED).
+  5. Enqueue the per-item callback through `sendCallback(body, deduplicationId)`, the single place for `callbacks.fifo` with `groupId = requestId`.
+  6. Request: `findOneAndUpdate({_id, pendingItems: itemId}, {$pull}, {returnDocument: after})`. If that matches nothing, `findOne` (throw if the request is missing). Finalize when `pendingItems` is empty and the status is IN_PROGRESS. Cancelled requests are not finalized here; the step-3 cancel route owns that.
+  7. The SQS message is deleted last.
+- **Terminal rerun:** `claimItem` returns `{claimed: false, reason: "terminal", status}` for a terminal item. The worker then runs `completeItem({itemId, status})` to repair a crashed handoff. Claim order: load the item, then the request. A CANCELLED request settles the item CANCELLED through `completeItem` (restricted to non-terminal items) and returns `cancelled` without incrementing attempts.
+- **Callback consumers** must be idempotent and read the terminal status from `job_reports`. Terminal reruns re-send callbacks beyond the FIFO dedup window, so duplicates are expected.
+- **Usage:** each attempt pushes one `Usage` entry onto its item (`computeTier`, `computeSec`, `memoryMb`, plus `vcpu` and `spot` for fargate, and optional output, audio and LLM fields). Failed attempts are recorded with `recordFailedAttempt` before the error is rethrown. Interrupted (SIGTERM) attempts are metered too: `releaseLease` pushes their usage under the lease. Superseded attempts pass their usage to `completeItem`. The job report stores `usage` as a `UsageSummary` with only the metrics that are present, per tier and per LLM model.
 - **Terminal statuses:** COMPLETE, SKIPPED, ERROR and CANCELLED all set `completedAt`, which starts the TTL.
 - **Crash at any point:** the message reappears after the visibility timeout, and the handler reruns safely.
 - **Fan-out recovery (the scaler owns it):** once the `requests` doc is persisted, finishing the request is Helios's job, never the client's.
@@ -144,7 +153,7 @@
   - The API returns `503 Service Unavailable` ("can't process right now, try again later") only when the request can't be persisted at all, i.e. a system outage.
   - The SDK still generates a `requestId` internally and reuses it on network retries for idempotency, invisibly to the user.
 - **DLQ consumer Lambda:** marks the item ERROR (or SKIPPED for optional AI steps), releases dependents according to policy, `$pull`s the item from `pendingItems`, and fires the error callback.
-- **SIGTERM (Fargate):** set the message visibility to 0 so another worker picks it up immediately.
+- **SIGTERM (Fargate):** release the lease (QUEUED, attempt usage recorded, `attempts` decremented), send a fresh copy of the message, and delete the old one. A stale lease matches nothing, and the copy is still sent.
 - The Lambda entrypoint runs the same handler. If it returns an error or times out, the message isn't deleted, so SQS redelivers it and then redrives it to Fargate.
 
 ## AI post-processing (Phase 1)
@@ -235,6 +244,15 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
   - `GET /usage?from&to&groupBy` serves the console.
   - *Build step:* schema now; filled in by the workers.
 
+## Cost units (stored once per request)
+- Helios stores resource units, never dollars or a currency. Dollar prices are derived outside Helios from these units, so price changes never require a data migration.
+- `computeResourceUnits(usages)` is pure. It produces `ResourceUnits` (contracts): `lambdaGbSeconds` (Σ computeSec × memoryMb/1024), `fargateVcpuSeconds`, `fargateGbSeconds`, `fargateSpotVcpuSeconds`, `fargateSpotGbSeconds` (on-demand split from spot by the `spot` flag), `outputGb` (Σ outputBytes / 1024³), `transcriptionAudioSeconds`, and `llmTokens` per model. Every field is a real sum, starting from 0.
+- Each usage entry carries what is needed to derive units: `memoryMb` (required), `vcpu` and `spot` (required for fargate). The worker fills them from `WORKER_MEMORY_MB`, `WORKER_VCPU` and `WORKER_SPOT`, which are required with no defaults.
+- `finalizeRequest` computes the units once and stores them on the job report (`resourceUnits`). It then increments `usage_daily` (`_id: ${accountId}:${YYYY-MM-DD}`, the day is the UTC day of the finalize time) with the request count, each unit field, and LLM tokens per model.
+- **Exactly once:** setting `unitsRecordedAt` on the job report (guarded by `{unitsRecordedAt: {$exists: false}}`) and the `usage_daily` `$inc` run in one Mongo transaction (`withTransaction`). A failed increment rolls back the marker, so the next finalize retries it. Tests use the replica-set memory server.
+- **LLM model keys:** `usage_daily` paths use `mongoKey(model)`, which escapes `%`, then `.` and `$` (`%25`, `%2E`, `%24`).
+- **Display dimensions:** `SourceMetadata.width`/`height` are the display dimensions, after rotation is applied by analyze. The worker applies EXIF orientation (`sharp.rotate()`) to every image output, so stored sizes match what viewers see.
+
 ## API notes
 - **OpenAPI (addition 7):** generated from the zod schemas (`@asteasolutions/zod-to-openapi`) and served at `/docs`. The SDK types come from the same schemas. *Build step:* 3 + 8.
 - **Callback delivery log + redeliver (addition 8):**
@@ -275,7 +293,7 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 
 ## Corrections to the gist (applied)
 1. **Priority:** set by queue tier (p1→p4) rather than a sort key. Every video's default rendition is processed before secondary profiles.
-2. **Leases:** SQS visibility timeout + heartbeat. Redelivery handles worker crashes, so no sweep job is needed. On SIGTERM, set visibility to 0.
+2. **Leases:** a Mongo heartbeat lease (`leaseId`, `heartbeatAt`, `LEASE_SEC`). SQS visibility is at least the lease and is extended by the heartbeat. Redelivery handles worker crashes, so no sweep job is needed. On SIGTERM, the lease is released and the message is requeued.
 3. **Finalize:** the request's `pendingItems` id set in Mongo; the caller that empties it finalizes. Error outcomes (via the DLQ consumer) also produce callbacks; encoding-laravel never sends them.
 4. **Resolution:** never upscale.
 5. **Versioning:** bump only on re-encode.
@@ -287,7 +305,7 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 7. **API keys:** `sk_live_` keys stored as SHA-256 with an indexed lookup.
 8. **One URL scheme:**
    - Keys: `{slug}/media/{assetId}/…`, `{slug}/files/…`.
-   - CDN: `?v=` with only `v` allow-listed.
+   - CDN: `?v=` with only `v` allow-listed. Outputs use stable keys, so a re-encode overwrites them in place. Step 7 adds a CloudFront invalidation of `/{slug}/media/{assetId}/*` after a re-encode finalizes. Not built yet.
    - Images: `/img/w_,h_,q_,f_,c_pad,b_HEX/{key}` (replaces icarus `?width&height&background_fill`).
 9. **`POST /files`** for raw uploads. **Multipart presigned uploads** for large files (replaces icarus `sign_auth` + Evaporate): `POST /uploads/multipart` (create, returns `uploadId` + part URLs), `POST /uploads/multipart/:uploadId/complete`, `DELETE /uploads/multipart/:uploadId`. Same flow as bella's `cloud/kodak.ts` multipart functions.
 10. **Image transforms run on a regional Lambda origin**, which avoids Lambda@Edge's 1 MB limit, us-east-1 deploys and lack of env vars.
@@ -434,6 +452,83 @@ const event = helios.webhooks.verify(rawBody, signatureHeader);   // typed discr
 
 Execution: I orchestrate, haiku subagents build modules (context under 100k), and opus audits each phase and the prompts.
 
+## Step 2 design: worker + completion handler
+
+**ffmpeg parity with encoding-laravel.** Commands were reconstructed from `vendor/expo/ffmpeg-sdk` + `Encoding/Thread.php`. The intentional differences are marked ★.
+- **Input:** `-y -nostdin -reconnect_on_http_error 503,500 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1 -i <presigned URL>`, plus ★`-progress pipe:1 -nostats` for progress reporting.
+- **MP4 (`video` profiles):**
+  - Filters: `-vf "yadif=0:-1:0,scale=-2:H"`, where ★`H = min(targetHeight, sourceHeight)` (never upscale; encoding-laravel upscaled a 640p source to 720).
+  - Video: `-c:v libx264 -preset:v faster -profile:v main -x264opts nr=500:ref=2 -b:v <k> -r 30 -g 90 -pix_fmt yuv420p`. That is VBR, so `-b:v` only, with no maxrate/bufsize.
+  - Audio: `-c:a aac -ac 2 -ar 44100 -b:a <k>`.
+  - Container: `-movflags +faststart -dn -f mp4`.
+  - ★Mapping: explicit `-map 0:v:0`, plus `-map 0:a:0` only when the source has audio.
+- **Stills:**
+  - `-vf fps=<fps> -pix_fmt yuvj420p -f image2 tmb/%04d.jpg` at the source resolution, with no yadif.
+  - JPEG quality is ffmpeg's mjpeg default, the same as encoding-laravel.
+  - `timestampSec = index / fps`, so `0001.jpg` = 0 s, `0002.jpg` = 3 s. encoding-laravel computed this but never stored it; Helios stores it in `items[]`.
+- **MP3:** `-vn -c:a libmp3lame -ac 2 -ar 44100 -b:a 92k -f mp3`. ★The stray video flags encoding-laravel emitted are dropped.
+- **Parent + children:** run in **one ffmpeg invocation with multiple outputs** (`mp4_360` + `tmb/%04d.jpg`). The source is decoded once, where encoding-laravel ran sequential passes.
+- **Image sources:** `image` and `image_still` go through `sharp`, not ffmpeg: a full JPG at the profile quality, plus one still at source resolution.
+
+**Worker (`worker/` package, `@helios/worker`).**
+- **`ffmpeg/`:** pure arg builders per profile type (golden-tested against the commands above), a runner (spawn, progress parser, last 50 stderr lines kept for errors), and an ffprobe of each output to fill `MediaAssetOutput`.
+- **`handlers/`:** a registry keyed by item kind (`encode` → `encodeHandler`). `encodeHandler` dispatches per profile type to `video/` or `image/`, both of which build local paths with the shared `localOutputPath`, and it composes the parent + children outputs. `transcribe` and `scenes` handlers arrive in steps 5–6; until then those items fail into the DLQ path.
+- **`processItem(itemId, messageId)`:**
+  1. Claim the item.
+  2. Load the request snapshot, asset and account.
+  3. Encode to `WORK_DIR`.
+  4. Upload to `{slug}/media/{assetId}/…` (stable keys), then delete stale stills under the stills prefix that the new stills don't overwrite.
+  5. Run `completeItem` (outside the failure path).
+  - **Outdated jobs self-skip.** Before uploading and again before the stale-stills deletion, the encode handler re-reads `asset.version`. If it is greater than `request.assetVersion`, the job stops and settles SKIPPED with `error: "superseded by asset version N"` and its attempt usage through `completeItem`.
+  - **Accepted race:** an outdated job that passes the pre-upload check may overwrite a newer version's bytes. This is rare. The metadata stays version-guarded, and the step 7 invalidation plus the next re-encode heal it.
+  - **Success is lease-guarded too.** Before `COMPLETE`, the lease is renewed. A lost lease returns `redeliver` and writes nothing.
+  - **Lease heartbeat** (`startHeartbeat`, a sequential `setTimeout` chain, so beats never overlap): every `HEARTBEAT_SEC`, `renewLease(itemId, leaseId, progress)` and then `ChangeMessageVisibility(VISIBILITY_EXTENSION_SEC)`. A failed beat is logged and retried on the next tick. A lost lease (`renewLease` returns false) or a CANCELLED request aborts the attempt.
+  - **Failure writes are lease-guarded.** The error and the attempt usage are written with the filter `{_id, status: IN_PROGRESS, leaseId}`. A stale worker's failure writes match nothing. The failure is then rethrown, so the message is left for redelivery.
+  - **Cancel mid-encode:** `completeItem({ status: "CANCELLED", usage })`, then ack.
+  - **Lost lease:** the attempt is aborted and the message is left unacked (`redeliver`). It writes nothing.
+  - **SIGTERM with a message in flight:** the encode is aborted, `releaseLease(itemId, leaseId, usage)` sets the item back to QUEUED and pushes the attempt usage (guarded by `leaseId`, and `attempts` is decremented so an interruption does not consume a retry), a fresh copy of the message (same body, attributes and `groupId`) is sent to the same queue, the old message is deleted, and the process exits.
+- **Poll loop (Fargate):** `pollSequence(queues)` is a pure helper and it defines the order that is unit-tested.
+  - Short-poll `fargate-p1`→`p4` in order. When all are empty, long-poll `p1` for 5 s, which bounds the latency for lower tiers.
+  - Handles one item at a time. The long-poll receives the worker's `AbortSignal`, so `SIGTERM` interrupts it.
+  - Outcomes: `done` acks (including a busy claim held by a different message), `redeliver` (busy by the same message, lost lease, or a thrown error) leaves the message unacked, and `interrupted` requeues it as above.
+  - A poll, ack or visibility error ends the round, logs, backs off 1 s and continues.
+  - Idle exit after `WORKER_IDLE_TIMEOUT_SEC` when `IDLE_EXIT=true` (burst tasks).
+- **Local worker:** the `helios-worker` compose service (default profile) builds the `test` stage of `worker/Dockerfile`, mounts `local/` read-only so `local/config.json` is the only config source, and runs `npx tsx local/runWorker.ts` with `network_mode: host`, so presigned `localhost:4566` URLs resolve.
+- **`Dockerfile`:** `node:22-bookworm-slim` + pinned static ffmpeg/ffprobe (`mwader/static-ffmpeg`). The runtime stage installs only `sharp`, the one package the bundle externalizes, at its lockfile version. The Lambda RIC is added in step 4.
+
+**Core additions.**
+- **Config:** `MEDIA_BUCKET`, plus optional `S3_ENDPOINT` (LocalStack, path-style).
+- **`storage/`:** an `ObjectStore` interface + S3 implementation: presign get, upload file, list prefix, delete keys.
+- **`assets/`:** key builders (`{slug}/media/{assetId}/…`, `{id}` = assetId), plus `pickActiveStill`:
+  - a still the user selected maps to the new still with the nearest `timestampSec`;
+  - otherwise index 0.
+- **`pipeline/claimItem(itemId, messageId, leaseSec)`:** the request is checked first (CANCELLED → the item is marked CANCELLED and the message is acked). Then `findOneAndUpdate` on `{_id, $or: [{status: QUEUED}, {status: BLOCKED, pendingDeps: {$size: 0}}, {status: IN_PROGRESS, heartbeatAt: {$lt: now - leaseSec}}]}`. It sets `IN_PROGRESS`, `messageId`, a new random `leaseId`, `heartbeatAt: now`, and `$min` on `startedAt` (so only the first claim sets it), and `$inc attempts`. An IN_PROGRESS item with a fresh heartbeat returns `{claimed: false, reason: "busy", messageId}` with the holder's messageId. The caller acks when it differs and leaves the message unacked when it is the same, so the message reappears later.
+- **`pipeline/lease`:** `renewLease(itemId, leaseId, progress?)` updates `heartbeatAt` (and `progress`) only when the lease matches. `releaseLease(itemId, leaseId, usage?)` sets QUEUED, unsets `leaseId` and `heartbeatAt`, decrements `attempts`, and pushes `usage` when given, all guarded by `leaseId`.
+- **`pipeline/recordFailedAttempt`:** pushes the attempt usage and sets `error`, guarded by `{status: IN_PROGRESS, leaseId}`.
+- **`pipeline/completeItem`:** idempotent; it is shared later with the DLQ consumer, which passes ERROR/SKIPPED.
+  1. Set the terminal status + output + usage + `completedAt` (skipped if the item is already terminal), and `$set outputs.<profile>` (+ `activeStill`) on the asset.
+  2. For each dependent:
+     - `$pull pendingDeps`;
+     - if it is BLOCKED with `pendingDeps` empty, **send to SQS first, then flip to QUEUED**. A crash between the two re-sends on rerun, and claim accepts both BLOCKED-ready and QUEUED, so nothing is lost and duplicates are harmless.
+  3. Enqueue the per-item callback message `{type: "item", requestId, itemId}` to `callbacks.fifo` (dedup id `${itemId}:item`).
+  4. `$pull pendingItems` on the request. If it is empty and the request is still `IN_PROGRESS`:
+     - upsert the job report (unique per request);
+     - enqueue the final callback (dedup id `${requestId}:final`);
+     - **then** flip the request to COMPLETE (ERROR if any item is ERROR) with `completedAt`.
+     - Every step is idempotent, so a crash at any point is repaired by redelivery.
+- **Index:** the stuck-fan-out resumer gets an index `{enqueuedAt: 1, createdAt: 1}` with `partialFilterExpression {status: "IN_PROGRESS"}`.
+- **Purge:** deferred to step 3 together with its route; the CDN invalidation comes in step 7.
+
+**Tests.**
+- **Unit:** golden ffmpeg args per profile, including a capped default and a no-audio video; the progress parser; `pickActiveStill`; claim/complete idempotency (rerun after a crash at each step: no double release, no double finalize, nothing lost).
+- **`npm run test:golden`:** runs inside the worker Docker image on generated fixtures. It checks output heights, bitrates within tolerance, faststart (`moov` before `mdat`), still count ≈ duration/3 with timestamps, MP3 params, and image + `image_still`.
+- **`npm run local:fixtures`:** generates the fixtures with ffmpeg into `.cache/fixtures` (16:9 1080p, 9:16 720p, 300p, no-audio, image).
+- **`test:local` e2e:**
+  1. Upload the fixtures to LocalStack S3.
+  2. Run `fanOut` (`postProcess` off).
+  3. Drain the queues with `processItem`.
+  4. Check: the request is COMPLETE, the job report exists, the outputs are in S3 and Mongo, `activeStill` is set, and the callbacks are enqueued.
+
 ## Local development & testing
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
 
@@ -533,3 +628,21 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **2026-10-17:** LocalStack pinned to `localstack/localstack:4.14` (compose standalone profile and the shared instance).
 - **2026-10-17:** `SQS_FAIR_QUEUES` config flag. The shared LocalStack was upgraded 4.5 → 4.14 (`localstack:4`; `latest` now requires a paid auth token), so it is `true` locally and on AWS.
 - **2026-10-17:** stuck fan-outs are resumed by the scaler (1-minute schedule, `FANOUT_RESUME_AFTER_SEC`); the API returns 202 once the request is persisted and 503 only when it cannot be persisted. Build in step 4 (scaler); the index lands with the step 2 model work.
+- **2026-10-17:** Required vs optional dependency edges. Scenes requires the default encode item and treats transcribe as optional. A required failure cascades SKIPPED with an error that names the dependency. An optional failure releases the dependent.
+- **2026-10-17:** Completion settles first, then hands off from the stored status and output. Late or losing completions change nothing, and the asset write is guarded by the request's `assetVersion`.
+- **2026-10-17:** Terminal items are rerun through claim (`reason: terminal`) so a crashed handoff is repaired on redelivery.
+- **2026-10-17:** Usage is recorded per attempt and per compute tier. The job report stores a `UsageSummary` with no zero-filled metrics.
+- **2026-10-17:** Cost is stored as resource units, not dollars. Helios never stores currency or rates, and prices are applied outside Helios. `usage_daily` is incremented exactly once per request, guarded by `unitsRecordedAt`.
+- **2026-10-17:** The worker runs as the `helios-worker` compose service with host networking, so presigned localhost URLs resolve.
+- **2026-10-18:** Stable output keys, no version history. Re-encodes overwrite `{slug}/media/{assetId}/…` in place, and stale stills are deleted after the new stills upload. Versioned keys (`v{n}/`) were considered and rejected. Instead, an outdated job checks the asset version before it uploads and before it deletes, and it self-skips as SKIPPED. A CloudFront invalidation after re-encode is planned for step 7.
+- **2026-10-18:** Heartbeat lease. Items carry `leaseId` and `heartbeatAt`. A fresh lease is `busy`. A duplicate delivery from a different message is acked, and the same message is left unacked. A stale lease is reclaimed with a new `leaseId`. A lost lease aborts the attempt and writes nothing. Failure and success writes are guarded by the lease.
+- **2026-10-18:** Interruptions do not consume retries. On SIGTERM the lease is released (`attempts` decremented) with the attempt usage metered, and a fresh copy of the message is sent before the old one is deleted. Superseded SKIPPED attempts are metered too.
+- **2026-10-18:** `VISIBILITY_EXTENSION_SEC` must be at least `LEASE_SEC` (worker config check).
+- **2026-10-18:** The worker's handler registry is keyed by item kind. `encode` dispatches per profile type inside the handler.
+- **2026-10-18:** A stills template without a directory is rejected by `stillsPrefix`, so stale-still cleanup can never reach the asset root.
+- **2026-10-18:** Callback consumers must be idempotent. Terminal reruns re-send callbacks beyond the FIFO dedup window.
+- **2026-10-18:** Accepted race: an outdated job that passes the pre-upload version check may overwrite a newer version's bytes. Metadata stays version-guarded, and the step 7 invalidation plus the next re-encode heal the bytes.
+- **2026-10-18:** The runtime image installs only `sharp` (the externalized package) at its lockfile version. Everything else is bundled into `dist/main.js`.
+- **2026-10-18:** `usage_daily` is incremented in one transaction together with `unitsRecordedAt`, and buckets use the UTC day of the finalize time. LLM model names are stored as `mongoKey`.
+- **2026-10-18:** SourceMetadata dimensions are display dimensions. Images are oriented with EXIF `rotate()`.
+- **2026-10-17:** Known limit: two concurrent redeliveries of the same final item can both finalize. Callback dedup ids and idempotent consumers absorb this. Distinct final completions finalize exactly once.

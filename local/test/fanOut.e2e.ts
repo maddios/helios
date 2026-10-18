@@ -114,7 +114,7 @@ async function pollUntil(read: () => Promise<Message[]>, count: number): Promise
 
 describe("fanOut against real queues", () => {
 	beforeAll(async () => {
-		await bootstrap(local.e2eQueuePrefix, local.mediaBucket);
+		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
 		await purgeAll();
 		await initDb(local.mongoUri);
 		await ensureIndexes();

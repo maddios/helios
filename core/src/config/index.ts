@@ -8,6 +8,8 @@ const schema = z.object({
 	LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]),
 	AWS_REGION: z.string().min(1),
 	SQS_ENDPOINT: z.url().optional(),
+	MEDIA_BUCKET: z.string().min(1),
+	S3_ENDPOINT: z.url().optional(),
 	SQS_FAIR_QUEUES: z.enum(["true", "false"]).transform((value) => value === "true")
 });
 

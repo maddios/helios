@@ -26,5 +26,6 @@ export const requests = () => db().collection<PipelineRequest>("requests");
 export const requestIndexes: IndexDescription[] = [
 	{ key: { accountId: 1, clientRequestId: 1 }, unique: true },
 	{ key: { accountId: 1, assetId: 1 } },
-	{ key: { accountId: 1, createdAt: -1 } }
+	{ key: { accountId: 1, createdAt: -1 } },
+	{ key: { enqueuedAt: 1, createdAt: 1 }, partialFilterExpression: { status: "IN_PROGRESS" } }
 ];

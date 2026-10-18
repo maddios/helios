@@ -1,6 +1,8 @@
 export * from "./db";
 export * from "./models";
 export * from "./presets";
+export * from "./assets";
+export * from "./storage";
 export * from "./pipeline";
 export * from "./logger";
 export { config, type Config } from "./config";

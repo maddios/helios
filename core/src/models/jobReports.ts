@@ -3,6 +3,7 @@ import type { IndexDescription } from "mongodb";
 import {
 	ItemKindSchema,
 	ItemStatusSchema,
+	RequestErrorSchema,
 	RequestStatusSchema,
 	ResourceUnitsSchema,
 	UsageSummarySchema
@@ -15,6 +16,7 @@ export const JobReportSchema = z.object({
 	accountId: z.string(),
 	assetId: z.string(),
 	status: RequestStatusSchema,
+	error: RequestErrorSchema.optional(),
 	items: z.array(
 		z.object({
 			itemId: z.string(),
@@ -26,7 +28,7 @@ export const JobReportSchema = z.object({
 	),
 	usage: UsageSummarySchema,
 	resourceUnits: ResourceUnitsSchema,
-	unitsRecordedAt: z.date().optional(),
+	unitsRecordedItems: z.array(z.string()),
 	createdAt: z.date()
 });
 export type JobReport = z.infer<typeof JobReportSchema>;

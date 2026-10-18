@@ -7,6 +7,9 @@ import type { HandlerContext, HandlerResult } from "./types";
 export async function encodeHandler(ctx: HandlerContext): Promise<HandlerResult> {
 	const { profile, children } = resolveProfiles(ctx.request, ctx.item);
 	const { sourceMetadata } = ctx.asset;
+	if (sourceMetadata === undefined) {
+		throw new Error(`Asset ${ctx.asset._id} has no source metadata; its items cannot run before analysis`);
+	}
 	const stored =
 		sourceMetadata.type === "image"
 			? await encodeImage(ctx, profile, children)

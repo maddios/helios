@@ -1,4 +1,5 @@
 {
+	"stage": "local",
 	"awsEndpoint": "http://localhost:4566",
 	"awsRegion": "us-east-2",
 	"awsAccessKeyId": "test",
@@ -7,13 +8,15 @@
 	"queuePrefix": "helios-local",
 	"e2eQueuePrefix": "helios-e2e",
 	"mediaBucket": "helios-local-media",
+	"cdnBaseUrl": "http://localhost:4566/helios-local-media",
+	"uploadUrlExpirySec": 900,
+	"maxUploadBytes": 10737418240,
 	"lambdaMaxDurationSec": 180,
 	"lambdaMaxSourceBytes": 524288000,
 	"logLevel": "debug",
 	"sqsFairQueues": true,
 	"worker": {
 		"ffmpegPath": "ffmpeg",
-		"ffprobePath": "ffprobe",
 		"workDir": ".cache/work",
 		"workerTier": "fargate",
 		"heartbeatSec": 10,
@@ -23,8 +26,15 @@
 		"workerMemoryMb": 2048,
 		"workerVcpu": 1,
 		"workerSpot": false,
-		"leaseSec": 30,
-		"sourceUrlTtlSec": 3600
+		"leaseSec": 30
 	},
-	"sourceBucket": "helios-local-sources"
+	"analyze": {
+		"ffprobePath": "ffprobe",
+		"analyzeTimeoutSec": 60,
+		"sourceUrlTtlSec": 3600,
+		"maxIngestBytes": 524288000,
+		"ingestTimeoutSec": 30
+	},
+	"sourceBucket": "helios-local-sources",
+	"ssrfAllowedHosts": "localhost,127.0.0.1"
 }

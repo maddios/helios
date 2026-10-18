@@ -1,7 +1,7 @@
 module.exports = {
 	preset: "ts-jest",
 	testEnvironment: "node",
-	setupFiles: ["<rootDir>/worker/test/env.ts"],
+	setupFiles: ["<rootDir>/core/test/env.ts", "<rootDir>/worker/test/env.ts"],
 	roots: ["<rootDir>/worker"],
 	testMatch: ["**/worker/test/golden/**/*.golden.ts"],
 	maxWorkers: 1,

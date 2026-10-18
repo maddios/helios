@@ -10,9 +10,9 @@ import {
 import type { QueueName } from "@helios/contracts";
 import {
 	closeDb,
+	createRequest,
 	dlqName,
 	ensureIndexes,
-	fanOut,
 	fullQueueName,
 	genericPreset,
 	initDb,
@@ -35,7 +35,7 @@ const POLL_DEADLINE_MS = 10000;
 const asset: MediaAsset = {
 	_id: randomUUID(),
 	accountId,
-	source: { bucket: local.mediaBucket, key: "e2e/source.mp4" },
+	source: { type: "s3", bucket: local.mediaBucket, key: "e2e/source.mp4" },
 	sourceMetadata: {
 		type: "video",
 		sizeBytes: 1000000,
@@ -112,7 +112,7 @@ async function pollUntil(read: () => Promise<Message[]>, count: number): Promise
 	return collected;
 }
 
-describe("fanOut against real queues", () => {
+describe("createRequest against real queues", () => {
 	beforeAll(async () => {
 		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
 		await purgeAll();
@@ -131,7 +131,7 @@ describe("fanOut against real queues", () => {
 	});
 
 	it("lands each item in its queue with attributes and, when fair queues are on, MessageGroupId", async () => {
-		const { request } = await fanOut({ asset, mode: "encode", preset: genericPreset });
+		const { request } = await createRequest({ asset, mode: "encode", preset: genericPreset, analyze: "sync" });
 		expect(request.clientRequestId).toBe(request._id);
 		expect(request.pendingItems).toHaveLength(6);
 		expect(await pipelineItems().findOne({ _id: `${request._id}:scenes` })).toMatchObject({ status: "BLOCKED" });

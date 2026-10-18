@@ -1,3 +1,4 @@
+process.env.STAGE = "local";
 process.env.MONGO_URI = "mongodb://unit-tests-use-memory-server.invalid";
 process.env.QUEUE_PREFIX = "helios-test";
 process.env.LAMBDA_MAX_DURATION_SEC = "180";
@@ -6,3 +7,8 @@ process.env.LOG_LEVEL = "fatal";
 process.env.AWS_REGION = "us-east-2";
 process.env.SQS_FAIR_QUEUES = "true";
 process.env.MEDIA_BUCKET = "helios-test-media";
+process.env.CDN_BASE_URL = "https://cdn.test.invalid/helios-test-media";
+process.env.UPLOAD_URL_EXPIRY_SEC = "900";
+process.env.MAX_UPLOAD_BYTES = String(10 * 1024 ** 3);
+process.env.SSRF_ALLOWED_HOSTS = "";
+process.env.INGEST_TIMEOUT_SEC = "60";

@@ -8,6 +8,7 @@ const apiKey = {
 	name: "test",
 	hash: "abc",
 	prefix: "hel_",
+	scope: "account" as const,
 	createdAt: new Date()
 };
 

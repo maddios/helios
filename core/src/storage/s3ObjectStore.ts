@@ -1,6 +1,20 @@
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
-import { DeleteObjectsCommand, GetObjectCommand, paginateListObjectsV2, type S3Client } from "@aws-sdk/client-s3";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import {
+	AbortMultipartUploadCommand,
+	CompleteMultipartUploadCommand,
+	CreateMultipartUploadCommand,
+	DeleteObjectsCommand,
+	GetObjectCommand,
+	HeadObjectCommand,
+	paginateListObjectsV2,
+	PutObjectCommand,
+	type S3Client,
+	UploadPartCommand
+} from "@aws-sdk/client-s3";
+import { S3ServiceException } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { ObjectStore } from "./types";
@@ -13,6 +27,18 @@ export class S3ObjectStore implements ObjectStore {
 		private readonly mediaBucket: string
 	) {}
 
+	async headObject(bucket: string, key: string): Promise<boolean> {
+		try {
+			await this.client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+			return true;
+		} catch (err) {
+			if (err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404) {
+				return false;
+			}
+			throw err;
+		}
+	}
+
 	presignGet(bucket: string, key: string, expiresSec: number): Promise<string> {
 		return getSignedUrl(this.client, new GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn: expiresSec });
 	}
@@ -24,6 +50,27 @@ export class S3ObjectStore implements ObjectStore {
 			params: { Bucket: this.mediaBucket, Key: key, Body: createReadStream(filePath), ContentType: contentType }
 		}).done();
 		return size;
+	}
+
+	async uploadStream(key: string, body: Readable, contentType: string): Promise<number> {
+		let bytes = 0;
+		const counter = new Transform({
+			transform(chunk: Buffer, _encoding, callback) {
+				bytes += chunk.length;
+				callback(null, chunk);
+			}
+		});
+		const upload = new Upload({
+			client: this.client,
+			params: { Bucket: this.mediaBucket, Key: key, Body: counter, ContentType: contentType }
+		}).done();
+		try {
+			await Promise.all([upload, pipeline(body, counter)]);
+		} catch (err) {
+			body.destroy();
+			throw err;
+		}
+		return bytes;
 	}
 
 	async listKeys(prefix: string): Promise<string[]> {
@@ -54,5 +101,50 @@ export class S3ObjectStore implements ObjectStore {
 				throw new Error(`Failed to delete ${Errors.length} object(s): ${Errors.map((e) => e.Key).join(", ")}`);
 			}
 		}
+	}
+
+	presignPut(key: string, expiresSec: number, contentType?: string): Promise<string> {
+		return getSignedUrl(
+			this.client,
+			new PutObjectCommand({ Bucket: this.mediaBucket, Key: key, ContentType: contentType }),
+			{ expiresIn: expiresSec }
+		);
+	}
+
+	async createMultipartUpload(key: string, contentType?: string): Promise<string> {
+		const { UploadId } = await this.client.send(
+			new CreateMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, ContentType: contentType })
+		);
+		if (UploadId === undefined) {
+			throw new Error(`S3 did not return an UploadId for ${key}`);
+		}
+		return UploadId;
+	}
+
+	presignPart(key: string, uploadId: string, partNumber: number, expiresSec: number): Promise<string> {
+		return getSignedUrl(
+			this.client,
+			new UploadPartCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId, PartNumber: partNumber }),
+			{ expiresIn: expiresSec }
+		);
+	}
+
+	async completeMultipartUpload(
+		key: string,
+		uploadId: string,
+		parts: { partNumber: number; etag: string }[]
+	): Promise<void> {
+		await this.client.send(
+			new CompleteMultipartUploadCommand({
+				Bucket: this.mediaBucket,
+				Key: key,
+				UploadId: uploadId,
+				MultipartUpload: { Parts: parts.map(({ partNumber, etag }) => ({ PartNumber: partNumber, ETag: etag })) }
+			})
+		);
+	}
+
+	async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
+		await this.client.send(new AbortMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId }));
 	}
 }

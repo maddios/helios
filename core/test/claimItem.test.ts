@@ -1,5 +1,5 @@
 import { ensureIndexes, mediaAssets, pipelineItems, requests, type MediaAsset } from "../src/models";
-import { claimItem, fanOut, type FanOutInput } from "../src/pipeline";
+import { claimItem, createRequest, type CreateRequestInput } from "../src/pipeline";
 import { genericPreset } from "../src/presets";
 import { resetDb, startMongo, stopMongo } from "./helpers/mongo";
 
@@ -8,7 +8,7 @@ jest.mock("../src/queue", () => require("./helpers/queueMock"));
 const asset: MediaAsset = {
 	_id: "asset-1",
 	accountId: "account-1",
-	source: { bucket: "bucket", key: "source.mp4" },
+	source: { type: "s3", bucket: "bucket", key: "source.mp4" },
 	sourceMetadata: {
 		type: "video",
 		sizeBytes: 1000000,
@@ -36,8 +36,8 @@ function itemId(key: string): string {
 	return `${requestId}:${key}`;
 }
 
-function input(overrides: Partial<FanOutInput> = {}): FanOutInput {
-	return { requestId: "req-claim", asset, mode: "encode", preset: genericPreset, ...overrides };
+function input(overrides: Partial<CreateRequestInput> = {}): CreateRequestInput {
+	return { requestId: "req-claim", asset, mode: "encode", preset: genericPreset, analyze: "sync", ...overrides };
 }
 
 async function setItem(id: string, fields: Record<string, unknown>): Promise<void> {
@@ -52,7 +52,7 @@ describe("claimItem", () => {
 		await resetDb();
 		await ensureIndexes();
 		await mediaAssets().insertOne(asset);
-		requestId = (await fanOut(input())).request._id;
+		requestId = (await createRequest(input())).request._id;
 	});
 
 	it("claims a QUEUED item and records the message, start time and attempt", async () => {

@@ -9,3 +9,5 @@ export * from "./usage";
 export * from "./resourceUnits";
 export * from "./transcript";
 export * from "./scenes";
+export * from "./errors";
+export * from "./api";

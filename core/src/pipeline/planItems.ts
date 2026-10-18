@@ -3,18 +3,40 @@ import { isShortSource, routeItem } from "./route";
 import type { Dependency, PlannedItem, Thresholds } from "./types";
 
 export const AI_ITEM_PRIORITY = { transcribe: 20, scenes: 30 } as const;
+const PURGE_ITEM_PRIORITY = 10;
 
 const MAX_UPSCALE_PX = 100;
 
-export interface PlanInput {
+export interface MediaPlanInput {
 	preset: Preset;
 	source: SourceMetadata;
 	postProcess: ResolvedPostProcess;
-	mode: RequestMode;
+	mode: Exclude<RequestMode, "purge">;
 	thresholds: Thresholds;
 }
 
-export function planItems({ preset, source, postProcess, mode, thresholds }: PlanInput): PlannedItem[] {
+export interface PurgePlanInput {
+	mode: "purge";
+}
+
+export type PlanInput = MediaPlanInput | PurgePlanInput;
+
+export function planItems(input: PlanInput): PlannedItem[] {
+	return input.mode === "purge" ? [purgeItem()] : planMediaItems(input);
+}
+
+function purgeItem(): PlannedItem {
+	return {
+		key: "purge",
+		kind: "purge",
+		queue: "fargate-p2",
+		priority: PURGE_ITEM_PRIORITY,
+		status: "QUEUED",
+		dependsOn: []
+	};
+}
+
+function planMediaItems({ preset, source, postProcess, mode, thresholds }: MediaPlanInput): PlannedItem[] {
 	const isShort = isShortSource(source, thresholds);
 	const encodeItems =
 		mode === "postProcess" ? [] : encodeProfiles(preset, source).map((profile) => encodeItem(profile, mode, isShort));

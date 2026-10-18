@@ -1,6 +1,7 @@
-import { Db, MongoClient, type ClientSession } from "mongodb";
+import { Db, MongoClient, MongoBulkWriteError, MongoServerError, type ClientSession } from "mongodb";
 
 const DB_NAME = "helios";
+const DUPLICATE_KEY_CODE = 11000;
 
 let client: MongoClient | undefined;
 
@@ -33,4 +34,16 @@ export async function withTransaction(work: (session: ClientSession) => Promise<
 export async function closeDb(): Promise<void> {
 	await client?.close();
 	client = undefined;
+}
+
+export function isDuplicateKeyError(err: unknown): boolean {
+	return err instanceof MongoServerError && err.code === DUPLICATE_KEY_CODE;
+}
+
+export function isOnlyDuplicateKeyError(err: unknown): boolean {
+	if (!(err instanceof MongoBulkWriteError)) {
+		return false;
+	}
+	const writeErrors = Array.isArray(err.writeErrors) ? err.writeErrors : [err.writeErrors];
+	return writeErrors.every((writeError) => writeError.code === DUPLICATE_KEY_CODE);
 }

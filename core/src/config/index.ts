@@ -1,17 +1,43 @@
 import { z } from "zod";
 
-const schema = z.object({
-	MONGO_URI: z.string().min(1),
-	QUEUE_PREFIX: z.string().min(1),
-	LAMBDA_MAX_DURATION_SEC: z.coerce.number().positive(),
-	LAMBDA_MAX_SOURCE_BYTES: z.coerce.number().int().positive(),
-	LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]),
-	AWS_REGION: z.string().min(1),
-	SQS_ENDPOINT: z.url().optional(),
-	MEDIA_BUCKET: z.string().min(1),
-	S3_ENDPOINT: z.url().optional(),
-	SQS_FAIR_QUEUES: z.enum(["true", "false"]).transform((value) => value === "true")
-});
+export const StageSchema = z.enum(["local", "dev", "prod"]);
+export type Stage = z.infer<typeof StageSchema>;
+
+const hostList = z.string().transform((value) =>
+	value
+		.split(",")
+		.map((host) => host.trim().toLowerCase())
+		.filter((host) => host.length > 0)
+);
+
+const schema = z
+	.object({
+		STAGE: StageSchema,
+		MONGO_URI: z.string().min(1),
+		QUEUE_PREFIX: z.string().min(1),
+		LAMBDA_MAX_DURATION_SEC: z.coerce.number().positive(),
+		LAMBDA_MAX_SOURCE_BYTES: z.coerce.number().int().positive(),
+		LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]),
+		AWS_REGION: z.string().min(1),
+		SQS_ENDPOINT: z.url().optional(),
+		MEDIA_BUCKET: z.string().min(1),
+		S3_ENDPOINT: z.url().optional(),
+		SQS_FAIR_QUEUES: z.enum(["true", "false"]).transform((value) => value === "true"),
+		CDN_BASE_URL: z.url(),
+		UPLOAD_URL_EXPIRY_SEC: z.coerce.number().int().positive(),
+		MAX_UPLOAD_BYTES: z.coerce.number().int().positive(),
+		SSRF_ALLOWED_HOSTS: hostList,
+		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive()
+	})
+	.superRefine((value, ctx) => {
+		if (value.STAGE !== "local" && value.SSRF_ALLOWED_HOSTS.length > 0) {
+			ctx.addIssue({
+				code: "custom",
+				path: ["SSRF_ALLOWED_HOSTS"],
+				message: "must be empty unless STAGE is local"
+			});
+		}
+	});
 
 export type Config = z.infer<typeof schema>;
 

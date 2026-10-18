@@ -46,7 +46,7 @@ describe("encodeImage", () => {
 
 	it("writes the primary and child outputs with {id} substituted in both paths", async () => {
 		const ctx = {
-			asset: { _id: "asset-1", source: { bucket: "src", key: "source.jpg" } },
+			asset: { _id: "asset-1", source: { type: "s3", bucket: "src", key: "source.jpg" } },
 			workDir,
 			signal: new AbortController().signal
 		} as unknown as HandlerContext;

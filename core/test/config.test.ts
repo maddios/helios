@@ -43,6 +43,29 @@ describe("config", () => {
 		expect(() => config()).toThrow(/AWS_REGION/);
 	});
 
+	it("rejects SSRF_ALLOWED_HOSTS outside the local stage", () => {
+		process.env.STAGE = "prod";
+		process.env.SSRF_ALLOWED_HOSTS = "localhost";
+		resetConfigForTests();
+		expect(() => config()).toThrow(/SSRF_ALLOWED_HOSTS/);
+	});
+
+	it("accepts SSRF_ALLOWED_HOSTS in the local stage and empty in prod", () => {
+		process.env.SSRF_ALLOWED_HOSTS = "localhost, 127.0.0.1";
+		resetConfigForTests();
+		expect(config().SSRF_ALLOWED_HOSTS).toEqual(["localhost", "127.0.0.1"]);
+		process.env.STAGE = "prod";
+		process.env.SSRF_ALLOWED_HOSTS = "";
+		resetConfigForTests();
+		expect(config()).toMatchObject({ STAGE: "prod", SSRF_ALLOWED_HOSTS: [] });
+	});
+
+	it("rejects an unknown STAGE", () => {
+		process.env.STAGE = "staging";
+		resetConfigForTests();
+		expect(() => config()).toThrow(/STAGE/);
+	});
+
 	it("throws naming a missing MONGO_URI", () => {
 		delete process.env.MONGO_URI;
 		resetConfigForTests();

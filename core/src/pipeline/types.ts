@@ -1,4 +1,4 @@
-import type { ItemKind, ItemStatus, QueueName } from "@helios/contracts";
+import type { ItemKind, ItemStatus, QueueName, RequestStatus } from "@helios/contracts";
 
 export interface Thresholds {
 	maxDurationSec: number;
@@ -36,4 +36,14 @@ export function isTerminal(status: ItemStatus): status is TerminalStatus {
 
 export function isFailed(status: ItemStatus): boolean {
 	return status === "ERROR" || status === "SKIPPED" || status === "CANCELLED";
+}
+
+export const OPEN_REQUEST_STATUSES = ["ANALYZING", "IN_PROGRESS"] as const;
+
+export function isOpenRequest(status: RequestStatus): boolean {
+	return (OPEN_REQUEST_STATUSES as readonly RequestStatus[]).includes(status);
+}
+
+export interface AnalyzeMessage {
+	requestId: string;
 }

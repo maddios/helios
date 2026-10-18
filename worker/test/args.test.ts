@@ -56,11 +56,19 @@ const RECONNECT = [
 	"1"
 ];
 
+const GUARD = [
+	"-protocol_whitelist",
+	"https,tls,tcp,http",
+	"-format_whitelist",
+	"mov,mp4,m4a,3gp,3g2,mj2,matroska,webm,avi,mpegts,flv,mpeg,ogg,wav,mp3,aac,flac,image2,png_pipe,jpeg_pipe,webp_pipe,gif"
+];
+
 describe("inputArgs", () => {
 	it("adds reconnect flags for http(s) inputs", () => {
 		expect(inputArgs(HTTP_URL)).toEqual([
 			"-y",
 			"-nostdin",
+			...GUARD,
 			...RECONNECT,
 			"-progress",
 			"pipe:1",
@@ -74,6 +82,7 @@ describe("inputArgs", () => {
 		expect(inputArgs("/tmp/source.mp4")).toEqual([
 			"-y",
 			"-nostdin",
+			...GUARD,
 			"-progress",
 			"pipe:1",
 			"-nostats",

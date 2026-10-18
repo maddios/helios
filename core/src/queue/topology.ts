@@ -17,6 +17,7 @@ export interface QueueSpec {
 const queueRedrives: Record<QueueName, Redrive> = {
 	"lambda-p1": { target: "fargate-p1", maxReceiveCount: 2 },
 	"lambda-ai": { target: "fargate-p3", maxReceiveCount: 2 },
+	analyze: { target: "dlq", maxReceiveCount: 3 },
 	"fargate-p1": { target: "dlq", maxReceiveCount: 3 },
 	"fargate-p2": { target: "dlq", maxReceiveCount: 3 },
 	"fargate-p3": { target: "dlq", maxReceiveCount: 3 },

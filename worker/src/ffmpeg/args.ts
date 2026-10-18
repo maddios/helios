@@ -1,4 +1,5 @@
 import type { AudioProfile, StillsProfile, VideoProfile, VideoSourceMetadata } from "@helios/contracts";
+import { mediaInputGuardArgs } from "@helios/core";
 
 const RECONNECT_ARGS = [
 	"-reconnect_on_http_error",
@@ -13,7 +14,17 @@ const RECONNECT_ARGS = [
 
 export function inputArgs(input: string): string[] {
 	const isHttp = /^https?:\/\//i.test(input);
-	return ["-y", "-nostdin", ...(isHttp ? RECONNECT_ARGS : []), "-progress", "pipe:1", "-nostats", "-i", input];
+	return [
+		"-y",
+		"-nostdin",
+		...mediaInputGuardArgs(),
+		...(isHttp ? RECONNECT_ARGS : []),
+		"-progress",
+		"pipe:1",
+		"-nostats",
+		"-i",
+		input
+	];
 }
 
 export function videoOutputArgs(profile: VideoProfile, source: VideoSourceMetadata, outPath: string): string[] {

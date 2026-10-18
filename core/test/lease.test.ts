@@ -1,6 +1,6 @@
 import type { Usage } from "@helios/contracts";
 import { ensureIndexes, mediaAssets, pipelineItems, type MediaAsset } from "../src/models";
-import { claimItem, fanOut, recordFailedAttempt, releaseLease, renewLease } from "../src/pipeline";
+import { claimItem, createRequest, recordFailedAttempt, releaseLease, renewLease } from "../src/pipeline";
 import { genericPreset } from "../src/presets";
 import { resetDb, startMongo, stopMongo } from "./helpers/mongo";
 
@@ -12,7 +12,7 @@ const usage: Usage = { computeTier: "lambda", computeSec: 3, memoryMb: 1024 };
 const asset: MediaAsset = {
 	_id: "asset-1",
 	accountId: "account-1",
-	source: { bucket: "bucket", key: "source.mp4" },
+	source: { type: "s3", bucket: "bucket", key: "source.mp4" },
 	sourceMetadata: {
 		type: "video",
 		sizeBytes: 1000000,
@@ -42,7 +42,7 @@ describe("lease operations", () => {
 		await resetDb();
 		await ensureIndexes();
 		await mediaAssets().insertOne(asset);
-		const { request } = await fanOut({ asset, mode: "encode", preset: genericPreset });
+		const { request } = await createRequest({ asset, mode: "encode", preset: genericPreset, analyze: "sync" });
 		ITEM = `${request._id}:mp4_360`;
 	});
 

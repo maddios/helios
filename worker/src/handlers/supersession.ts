@@ -8,13 +8,23 @@ export class SupersededError extends Error {
 	}
 }
 
+export class AssetDeletedError extends Error {
+	constructor() {
+		super("asset deleted");
+		this.name = "AssetDeletedError";
+	}
+}
+
 export async function assertCurrent({ asset, request }: HandlerContext): Promise<void> {
 	const current = await mediaAssets().findOne(
 		{ _id: asset._id, accountId: asset.accountId },
-		{ projection: { version: 1 } }
+		{ projection: { version: 1, deletedAt: 1 } }
 	);
 	if (current === null) {
 		throw new Error(`Asset ${asset._id} not found for account ${asset.accountId}`);
+	}
+	if (current.deletedAt !== undefined) {
+		throw new AssetDeletedError();
 	}
 	if (current.version > request.assetVersion) {
 		throw new SupersededError(current.version);

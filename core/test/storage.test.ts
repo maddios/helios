@@ -1,6 +1,7 @@
 import { DeleteObjectsCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { mockClient } from "aws-sdk-client-mock";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { stat } from "node:fs/promises";
 import { resetConfigForTests } from "../src/config";
 import { objectStore, resetObjectStoreForTests, S3ObjectStore } from "../src/storage";
@@ -39,6 +40,23 @@ describe("S3ObjectStore", () => {
 		expect(s3Mock.commandCall(0, PutObjectCommand).args[0].input).toMatchObject({
 			Bucket: "media-bucket",
 			Key: "acme/media/a1/a1_720.mp4",
+			ContentType: "video/mp4"
+		});
+	});
+
+	it("streams a body to the media bucket and returns the bytes streamed", async () => {
+		s3Mock.on(PutObjectCommand).resolves({});
+
+		const bytes = await store().uploadStream(
+			"acme/sources/a1/original",
+			Readable.from([Buffer.from("abc"), Buffer.from("de")]),
+			"video/mp4"
+		);
+
+		expect(bytes).toBe(5);
+		expect(s3Mock.commandCall(0, PutObjectCommand).args[0].input).toMatchObject({
+			Bucket: "media-bucket",
+			Key: "acme/sources/a1/original",
 			ContentType: "video/mp4"
 		});
 	});

@@ -6,8 +6,8 @@ import type { ImageSourceMetadata, VideoSourceMetadata } from "@helios/contracts
 import {
 	accounts,
 	closeDb,
+	createRequest,
 	ensureIndexes,
-	fanOut,
 	genericPreset,
 	initDb,
 	jobReports,
@@ -18,18 +18,16 @@ import {
 	requests,
 	usageDaily,
 	type CallbackMessage,
-	type ItemMessage,
 	type MediaAsset
 } from "@helios/core";
-import { processMessage } from "../../worker/src/pollLoop";
 import { bootstrap } from "../bootstrap";
 import { loadLocalConfig } from "../loadConfig";
 import { FIXTURE_DIR, IMAGE_FIXTURE, VIDEO_FIXTURES } from "../fixtures";
+import { drainUntilTerminal } from "./drain";
 
 process.env.LOG_LEVEL = "warn";
 
 const local = loadLocalConfig();
-const FIXTURE_DEADLINE_MS = 180000;
 const FRAME_INTERVAL_SEC = 3;
 const H1080_DURATION_SEC = 12;
 const POST_PROCESS_OFF = { transcribe: false, sceneDetection: false } as const;
@@ -87,7 +85,7 @@ async function createAsset(name: string, sourceMetadata: MediaAsset["sourceMetad
 	const asset: MediaAsset = {
 		_id: randomUUID(),
 		accountId,
-		source: { bucket: local.sourceBucket, key },
+		source: { type: "s3", bucket: local.sourceBucket, key },
 		sourceMetadata,
 		presetName: genericPreset.name,
 		presetVersion: genericPreset.version,
@@ -99,27 +97,6 @@ async function createAsset(name: string, sourceMetadata: MediaAsset["sourceMetad
 	};
 	await mediaAssets().insertOne(asset);
 	return asset;
-}
-
-async function drainOnce(): Promise<void> {
-	for (const name of ["lambda-p1", "fargate-p1", "fargate-p2", "fargate-p3", "fargate-p4"] as const) {
-		const queue = queueFor<ItemMessage>(name);
-		for (const message of await queue.poll(1, 1)) {
-			await processMessage(queue, message, new AbortController().signal);
-		}
-	}
-}
-
-async function drainUntilTerminal(requestIds: string[]): Promise<void> {
-	const deadline = Date.now() + FIXTURE_DEADLINE_MS;
-	while (Date.now() < deadline) {
-		const open = await requests().countDocuments({ _id: { $in: requestIds }, status: "IN_PROGRESS" });
-		if (open === 0) {
-			return;
-		}
-		await drainOnce();
-	}
-	throw new Error(`Requests ${requestIds.join(", ")} did not finish within ${FIXTURE_DEADLINE_MS} ms`);
 }
 
 async function outputKeys(assetId: string): Promise<string[]> {
@@ -209,7 +186,13 @@ describe("worker e2e against LocalStack and Mongo", () => {
 			["image", image]
 		];
 		for (const [label, asset] of assets) {
-			const { request } = await fanOut({ asset, mode: "encode", preset: genericPreset, postProcess: POST_PROCESS_OFF });
+			const { request } = await createRequest({
+				asset,
+				mode: "encode",
+				preset: genericPreset,
+				postProcess: POST_PROCESS_OFF,
+				analyze: "sync"
+			});
 			requestIds[label] = request._id;
 		}
 		await drainUntilTerminal(Object.values(requestIds));
@@ -274,7 +257,13 @@ describe("worker e2e against LocalStack and Mongo", () => {
 			{ $set: { activeStill: { index: 0, timestampSec: 6, selectedByUser: true } } }
 		);
 		const asset = await assetDoc(h1080._id);
-		const { request } = await fanOut({ asset, mode: "reencode", preset: genericPreset, postProcess: POST_PROCESS_OFF });
+		const { request } = await createRequest({
+			asset,
+			mode: "reencode",
+			preset: genericPreset,
+			postProcess: POST_PROCESS_OFF,
+			analyze: "sync"
+		});
 		await drainUntilTerminal([request._id]);
 
 		expect(await requests().findOne({ _id: request._id })).toMatchObject({ status: "COMPLETE", assetVersion: 2 });

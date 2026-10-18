@@ -8,6 +8,14 @@ export function outputKey(slug: string, assetId: string, template: string): stri
 	return `${assetPrefix(slug, assetId)}${template.replaceAll("{id}", assetId)}`;
 }
 
+export function ingestPrefix(slug: string, assetId: string): string {
+	return `${slug}/sources/${assetId}/`;
+}
+
+export function ingestKey(slug: string, assetId: string): string {
+	return `${ingestPrefix(slug, assetId)}original`;
+}
+
 export function stillKey(slug: string, assetId: string, template: string, fileName: string): string {
 	return outputKey(slug, assetId, path.posix.join(path.posix.dirname(template), fileName));
 }

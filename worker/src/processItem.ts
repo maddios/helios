@@ -20,7 +20,7 @@ import { config } from "./config";
 import { FfmpegError } from "./ffmpeg/run";
 import { startHeartbeat } from "./heartbeat";
 import { handlerFor } from "./handlers/registry";
-import { SupersededError } from "./handlers/supersession";
+import { AssetDeletedError, SupersededError } from "./handlers/supersession";
 import type { HandlerResult } from "./handlers/types";
 
 export type ItemOutcome = "done" | "redeliver" | "interrupted";
@@ -157,7 +157,7 @@ async function failedOutcome(attempt: Attempt, err: unknown): Promise<ItemOutcom
 		await completeItem({ itemId, status: "CANCELLED", usage });
 		return "done";
 	}
-	if (err instanceof SupersededError) {
+	if (err instanceof SupersededError || err instanceof AssetDeletedError) {
 		await completeItem({ itemId, status: "SKIPPED", error: err.message, usage });
 		return "done";
 	}

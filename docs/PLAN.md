@@ -152,7 +152,7 @@
   - `POST /encode` returns 202 with the request id as soon as the request doc is written, even if a later fan-out write (items, SQS) fails; the resumer completes it.
   - The API returns `503 Service Unavailable` ("can't process right now, try again later") only when the request can't be persisted at all, i.e. a system outage.
   - The SDK still generates a `requestId` internally and reuses it on network retries for idempotency, invisibly to the user.
-- **DLQ consumer Lambda:** marks the item ERROR (or SKIPPED for optional AI steps), releases dependents according to policy, `$pull`s the item from `pendingItems`, and fires the error callback.
+- **DLQ consumer Lambda:** the callback consumer derives the `asset.deleted` event from the request mode (the message carries only `type`, `requestId`, and `itemId`). Redeliver is allowed only for terminal requests. Analyze DLQ: calls `failAnalyze(requestId)`. Marks the item ERROR (or SKIPPED for optional AI steps), releases dependents according to policy, `$pull`s the item from `pendingItems`, and fires the error callback.
 - **SIGTERM (Fargate):** release the lease (QUEUED, attempt usage recorded, `attempts` decremented), send a fresh copy of the message, and delete the old one. A stale lease matches nothing, and the copy is still sent.
 - The Lambda entrypoint runs the same handler. If it returns an error or times out, the message isn't deleted, so SQS redelivers it and then redrives it to Fargate.
 
@@ -529,6 +529,78 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
   3. Drain the queues with `processItem`.
   4. Check: the request is COMPLETE, the job report exists, the outputs are in S3 and Mongo, `activeStill` is set, and the callbacks are enqueued.
 
+## Step 3 design: API, auth, admin, request lifecycle
+
+**Request lifecycle (split fan-out).**
+- **`createRequest`:** persists the asset (with `sourceMetadata` absent until analyzed) and the request, with status **`ANALYZING`**, `presetSnapshot`, resolved `postProcess`, `mode` and `clientRequestId`. It is idempotent per `(accountId, clientRequestId)`, as before.
+- **`launchRequest`:** what fan-out used to do after the insert. It plans, sets `pendingItems`, inserts items, updates the asset, enqueues, sets `enqueuedAt`, and moves the status to `IN_PROGRESS`.
+- **`analyzeRequest(requestId)`:** ingests a URL source if needed, ffprobes the source over a presigned URL, stores `sourceMetadata` with display dims (rotation applied), then calls `launchRequest`.
+  - Any failure finalizes the request as `ERROR` with `error: { code, message }` and sends the final callback. Codes: `unprocessable_source` (not media, ffprobe failure or timeout, fetch failure), `unsafe_url`, `too_large`, `nothing_to_do` (no non-SKIPPED item), `asset_deleted` (tombstoned asset, non-purge requests). `failAnalyze(requestId)` (called by the analyze DLQ consumer in step 4) sets `analyze_failed`.
+- **Analysis is chosen per request** with `analyze: "async" | "sync"`:
+  - **`async`:** returns **202** after `createRequest` and enqueues an `analyze` message on the new `analyze` queue. The step-4 Lambda consumes it.
+  - **`sync`:** runs `analyzeRequest` inline and returns **201** with the planned items. `analyzeRequest` returns the final request; the API maps `ERROR` with `error.code` in {`unprocessable_source`, `nothing_to_do`, `unsafe_url`, `too_large`, `source_not_found`} to **422**. ffprobe has a hard timeout (`ANALYZE_TIMEOUT_SEC`).
+  - `sync` with a `url` source is a `ValidationError` (400). S3 and upload sources are checked with HeadObject at intake; a missing object returns 422 `source_not_found` before any write.
+  - URL sources are always async; `sync` + `url` returns 400.
+  - Re-encode and post-process on an already-analyzed asset skip analysis and launch directly.
+- **The scaler resumer (step 4) covers two cases:**
+  - `ANALYZING` older than N → re-enqueue analyze;
+  - `IN_PROGRESS` without `enqueuedAt` → `launchRequest`.
+
+**Sources** (`source` is one of the following):
+- `{ bucket, key }`: the bucket must be in the account's `sourceBuckets` allowlist.
+- `{ uploadKey }`: a Helios upload under `{slug}/uploads/…`.
+- `{ url }`, the new URL ingest. It is copied into `{slug}/sources/{assetId}/original` by the analyze step:
+  - http/https only;
+  - **SSRF guard:** DNS is resolved and private, loopback, link-local, CGNAT, metadata and reserved ranges (v4) are rejected. IPv6 is allow-only: `2000::/3` minus `2001::/23`, `2001:db8::/32`, `2002::/16` (6to4), `3fff::/20`; everything outside `2000::/3` (IPv4-mapped/compatible, NAT64 `64:ff9b::/96` and `64:ff9b:1::/48`, `fc00::/7`, `fe80::/10`, `fec0::/10`, `100::/64`) is rejected. Ports are limited to 80 and 443 unless `STAGE=local`. Connect and response-header and idle-socket timeouts come from `INGEST_TIMEOUT_SEC`. Fetch failures map to `unprocessable_source`. Every redirect hop is re-checked; the connection is pinned to the checked IP;
+  - `MAX_INGEST_BYTES` cap;
+  - streamed upload, never buffered.
+
+  The same SSRF guard validates `callbackUrl` at the API and again at delivery (step 4).
+
+**Auth.**
+- `Authorization: Bearer <key>`.
+- **Account keys** are `sk_live_` + 32 random bytes in base62. They are stored as SHA-256 with a unique index, and only a 12-char prefix is kept for display. `lastUsedAt` updates are throttled to once a minute.
+- **Admin keys** are `sk_admin_…` in the same collection with `scope: "admin"` and no `accountId`.
+- The first admin key comes from `npm run admin:bootstrap`, a one-time script that refuses to run if an admin key exists. Everything else goes through the Admin API.
+
+**Account API** (account keys). Request and response schemas live in `contracts` and generate OpenAPI at `/docs` + `/openapi.json`.
+
+| Area | Routes |
+|---|---|
+| Encoding | `POST /encode` (`?dryRun=true` with an S3 or upload source probes without writing, or the body supplies `sourceMetadata`), `POST /assets/:id/re-encode` (`refreshPreset`), `POST /assets/:id/post-process` |
+| Uploads | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
+| Assets | `GET /assets` (by `externalId`, cursor), `GET /assets/:id` (outputs with CDN URLs `CDN_BASE_URL/{key}?v={version}`, `postProcess` status, `activeStill`), `PATCH /assets/:id/active-still`, `DELETE /assets/:id` (202, purge), `GET /assets/:id/transcripts`, `GET /assets/:id/scenes` |
+| Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` |
+| Presets | per "Preset management API" (account presets; system presets are read and clone only) |
+| Usage | `GET /usage?from&to` (reads `usage_daily`) |
+| Health | `GET /health` (no auth) |
+
+**Admin API** (admin keys):
+- `POST/GET/PATCH /admin/accounts` (slug, name, `sourceBuckets`, `callbackUrl`, `features`);
+- `POST /admin/accounts/:id/keys` (the plaintext key is returned once) and `DELETE /admin/accounts/:id/keys/:keyId` (revoke);
+- `POST /admin/accounts/:id/webhook-secret/rotate` (`whsec_…`, returned once);
+- `/admin/presets` system preset CRUD;
+- `GET /admin/usage`.
+
+**Cancel:**
+1. Set the request to `CANCELLED`.
+2. Settle every BLOCKED/QUEUED item as CANCELLED through `completeItem`. IN_PROGRESS items abort on their next heartbeat and settle CANCELLED themselves.
+3. Write the job report (status CANCELLED) and send the final callback right away. Later settles don't finalize again, because finalize only acts on IN_PROGRESS requests.
+
+**Purge (`DELETE /assets/:id`):**
+1. Tombstone the asset (`deletedAt`). Reads return 404 from then on.
+2. Cancel in-flight requests.
+3. Enqueue a `purge` item on `fargate-p2`. The purge handler throws (retry) while another item of the asset holds a fresh lease. Otherwise it deletes every S3 object under the asset prefix and its ingest copy (`{slug}/sources/{id}/`), plus the upload it owns (the partial unique index on `source.key` means no other asset references it). It then scrubs the asset record (`$unset` outputs, activeStill, externalId, `sourceMetadata.probe`, `source.url`) and the `callback_deliveries` payloads for the asset's requests, deletes transcripts, scene_analyses and pipeline items (except the purge item), and sends the `asset.deleted` callback from the purge request's final callback. `requests`, `job_reports` and `usage_daily` are kept (decision A). The CDN invalidation is added in step 7.
+4. Kodak-owned sources are not touched.
+
+**Errors.** A single `HeliosError` hierarchy in `contracts` (`code`, HTTP status, message, details) maps to the JSON body `{ error: { code, message, details, requestId } }`. zod validation failures return 400 `validation_failed`.
+
+**Packages.**
+- **`api/`:** Express 5. Thin routers per resource, with logic in core modules (`accounts`, `apiKeys`, `presets`, `requests`, `assets`, `uploads`, `usage`, `callbacks`). Middleware handles auth, validation, error mapping, request logging and correlation ids.
+- **Seeds:** `npm run seed:presets` upserts the `generic` system preset.
+- **Local:** `npm run local:api`, plus a compose service `helios-api` (host network), and an e2e that drives the full HTTP flow. That flow is: admin creates account + key → upload → encode (sync and async) → drain the queues → GET asset → cancel → purge.
+- The Copilot manifest is deferred to step 9.
+
 ## Local development & testing
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
 
@@ -620,7 +692,7 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **2026-10-17:** `pipeline_items` TTL: 30 days after `completedAt`.
 - **2026-10-17:** Dependency tracking uses id sets, not counters. Items hold `pendingDeps: [ids]`, requests hold `pendingItems: [ids]`. Replays are idempotent, and a duplicate SQS send is acceptable.
 - **2026-10-17:** Request `_id` is always a server UUID. The per-account unique key is `{accountId, clientRequestId}`, where `clientRequestId` is the API's `requestId`. A repeat with a different asset or mode throws `RequestIdConflictError`, and a repeat of a request that was already enqueued or CANCELLED returns it without writes. Otherwise fan-out resumes: it plans once from the stored snapshot, inserts missing items, and enqueues only the items whose DB status is QUEUED.
-- **2026-10-17:** Zero-work requests (no non-SKIPPED item) fail with `NothingToDoError`, which the API maps to 422, before any write.
+- **2026-10-17:** Zero-work requests (no non-SKIPPED item) finalize as ERROR with code `nothing_to_do` (see the 2026-10-18 entries). The API maps it to 422 in sync mode.
 - **2026-10-17:** Silent video gets no MP3 item, and its transcribe item is SKIPPED. Images get no transcribe item. A dedicated `image_still` profile (stills, `maxCount: 1`) is a child of `image`.
 - **2026-10-17:** Client idempotency field renamed `requestId` → `clientRequestId` on the request doc. `requestId` on items, message attributes and logs always means `requests._id`. `FanOutInput` keeps the public name `requestId`.
 - **2026-10-17:** `requests.assetVersion` is stored at fan-out and applied to the asset with `$max`, so a resumed re-encode bumps the version once.
@@ -646,3 +718,15 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **2026-10-18:** `usage_daily` is incremented in one transaction together with `unitsRecordedAt`, and buckets use the UTC day of the finalize time. LLM model names are stored as `mongoKey`.
 - **2026-10-18:** SourceMetadata dimensions are display dimensions. Images are oriented with EXIF `rotate()`.
 - **2026-10-17:** Known limit: two concurrent redeliveries of the same final item can both finalize. Callback dedup ids and idempotent consumers absorb this. Distinct final completions finalize exactly once.
+- **2026-10-18:**
+  - Analysis is chosen per request (`analyze: sync | async`). Requests start as `ANALYZING`, and fan-out is split into `createRequest` and `launchRequest`.
+  - URL ingest is in Phase 1, with an SSRF guard, and is always async.
+  - The Admin API uses admin-scoped keys; only the first admin key comes from a one-time bootstrap script.
+- **2026-10-18 (step 3 review fixes):**
+  - Decision A (purge): keep `requests`, `job_reports` and `usage_daily`. Scrub PII from the asset record and callback payloads, and delete the bound upload. Purge waits (throws) while a fresh-lease item exists.
+  - Decision C (late cancel usage): an item that settles after its request finalized has its resource units added to `job_reports.resourceUnits` and `usage_daily` exactly once, guarded by `unitsRecordedItems`. This runs in one transaction. The first finalizer inserts the report (`$setOnInsert`), so its status and items win.
+  - Decision D (STAGE and SSRF allow rule): config requires `STAGE` (local|dev|prod). `SSRF_ALLOWED_HOSTS` must be empty unless `STAGE=local`, which is a startup error. Ports are 80/443 only, except in local stage. `http:` is allowed in ffmpeg and ffprobe only in local stage.
+  - Protocol and demuxer whitelists: ffprobe and ffmpeg run with `-protocol_whitelist https,tls,tcp[,http]` and `-format_whitelist` of the container demuxers (mov, mp4, m4a, 3gp, 3g2, mj2, matroska, webm, avi, mpegts, flv, mpeg, ogg, wav, mp3, aac, flac, image2, png_pipe, jpeg_pipe, webp_pipe, gif). The list was checked against host ffmpeg 4.4. Playlist and concat demuxers and `file:` are rejected.
+  - Ingest stores `application/octet-stream`. The probe JSON drops `format.filename`. ffprobe stderr is captured into the error, with the source URL redacted.
+  - A request is `ERROR` with a `{code, message}` error. A repeat of an ANALYZING async request re-enqueues analyze (idempotent), and launches once the asset is analyzed.
+  - Upload keys bind to one asset via a partial unique index on `media_assets.source.key` (type upload).

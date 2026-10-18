@@ -1,4 +1,13 @@
 {
 	"extends": "./tsconfig.base.json",
-	"include": ["contracts/src", "contracts/test", "core/src", "core/test", "worker/src", "worker/test", "local"]
+	"include": [
+		"contracts/src",
+		"contracts/test",
+		"core/src",
+		"core/test",
+		"core/scripts",
+		"worker/src",
+		"worker/test",
+		"local"
+	]
 }

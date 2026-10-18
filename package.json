@@ -22,7 +22,9 @@
 		"local:fixtures": "tsx local/fixtures.ts",
 		"test:golden": "jest -c jest.golden.config.js",
 		"build:worker": "esbuild worker/src/main.ts --bundle --platform=node --target=node22 --format=cjs --external:sharp --outdir=dist",
-		"test:golden:docker": "docker build -t helios-worker:test --target test -f worker/Dockerfile . && docker run --rm -v \"$PWD/local:/app/local:ro\" -v \"$PWD/.cache/fixtures:/app/.cache/fixtures:ro\" helios-worker:test"
+		"test:golden:docker": "docker build -t helios-worker:test --target test -f worker/Dockerfile . && docker run --rm -v \"$PWD/local:/app/local:ro\" -v \"$PWD/.cache/fixtures:/app/.cache/fixtures:ro\" helios-worker:test",
+		"admin:bootstrap": "tsx core/scripts/bootstrapAdmin.ts",
+		"seed:presets": "tsx core/scripts/seedPresets.ts"
 	},
 	"devDependencies": {
 		"@aws-sdk/client-s3": "^3.1152.0",

@@ -11,7 +11,8 @@ import {
 import { releaseDependent } from "./releaseDependents";
 import { sendCallback } from "./callbacks";
 import { finalizeRequest } from "./finalizeRequest";
-import { isFailed, TERMINAL_STATUSES, type TerminalStatus } from "./types";
+import { recordItemUnits } from "./unitsLedger";
+import { isFailed, isOpenRequest, TERMINAL_STATUSES, type TerminalStatus } from "./types";
 
 export interface CompleteItemInput {
 	itemId: string;
@@ -36,9 +37,12 @@ export async function completeItem(input: CompleteItemInput): Promise<void> {
 		throw new Error(`Request ${item.requestId} not found for item ${item._id}`);
 	}
 	await recordAssetOutputs(item, request);
-	await handoffDependents(item);
+	if (isOpenRequest(request.status)) {
+		await handoffDependents(item);
+	}
 	await sendCallback({ type: "item", requestId: item.requestId, itemId: item._id }, `${item._id}:item`);
 	await completeRequestItem(item, now);
+	await recordItemUnits(item);
 }
 
 function settleUpdate(input: CompleteItemInput, now: Date): UpdateFilter<PipelineItem> {

@@ -4,11 +4,12 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { EncodingProfile, StillsProfile } from "@helios/contracts";
-import { objectStore } from "@helios/core";
+import { objectStore, sourceObjectLocation } from "@helios/core";
 import { config } from "../../config";
 import { convertImage } from "../../image/convert";
 import { localOutputPath } from "../outputPath";
 import { storeOutputs, type ProducedOutput, type StoredOutputs } from "../storage";
+
 import type { HandlerContext } from "../types";
 
 async function download(url: string, destination: string, signal: AbortSignal): Promise<void> {
@@ -27,7 +28,7 @@ export async function encodeImage(
 	if (profile.type !== "image") {
 		throw new Error(`Profile ${profile.name} of type ${profile.type} cannot encode an image source`);
 	}
-	const { bucket, key } = ctx.asset.source;
+	const { bucket, key } = sourceObjectLocation(ctx.asset);
 	const sourcePath = path.join(ctx.workDir, "source");
 	await download(await objectStore().presignGet(bucket, key, config().SOURCE_URL_TTL_SEC), sourcePath, ctx.signal);
 

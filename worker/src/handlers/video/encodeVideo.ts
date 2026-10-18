@@ -1,12 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { EncodingProfile, StillsProfile, VideoSourceMetadata } from "@helios/contracts";
-import { objectStore } from "@helios/core";
+import { objectStore, sourceObjectLocation } from "@helios/core";
 import { config } from "../../config";
 import { buildCommand, type FfmpegOutput } from "../../ffmpeg/args";
 import { runFfmpeg } from "../../ffmpeg/run";
 import { localOutputPath } from "../outputPath";
 import { storeOutputs, type StoredOutputs } from "../storage";
+
 import type { HandlerContext } from "../types";
 
 interface PlannedOutput {
@@ -39,7 +40,7 @@ export async function encodeVideo(
 	for (const output of planned) {
 		await mkdir(path.dirname(output.localPath), { recursive: true });
 	}
-	const { bucket, key } = ctx.asset.source;
+	const { bucket, key } = sourceObjectLocation(ctx.asset);
 	const input = await objectStore().presignGet(bucket, key, config().SOURCE_URL_TTL_SEC);
 	await runFfmpeg(
 		buildCommand(

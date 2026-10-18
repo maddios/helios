@@ -2,8 +2,13 @@ import { z } from "zod";
 import { PostProcessDefaultsSchema } from "./postProcess";
 import { EncodingProfileSchema } from "./profile";
 
+export const PresetNameSchema = z
+	.string()
+	.regex(/^[a-z0-9][a-z0-9_-]{1,62}$/)
+	.describe("Preset name: lowercase letters, digits, hyphens or underscores; 2 to 63 characters");
+
 export const PresetBaseSchema = z.object({
-	name: z.string().describe("Preset name"),
+	name: PresetNameSchema,
 	version: z.int().min(1).describe("Preset version"),
 	description: z.string().describe("Human-readable preset description"),
 	profiles: z.array(EncodingProfileSchema).min(1).describe("Encoding profiles produced for each asset"),

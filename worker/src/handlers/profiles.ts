@@ -7,6 +7,9 @@ export interface ResolvedProfiles {
 }
 
 export function resolveProfiles(request: PipelineRequest, item: PipelineItem): ResolvedProfiles {
+	if (request.presetSnapshot === undefined) {
+		throw new Error(`Request ${request._id} has no preset snapshot`);
+	}
 	const { profiles } = request.presetSnapshot;
 	const profile = profiles.find((candidate) => candidate.name === item.profile);
 	if (profile === undefined) {

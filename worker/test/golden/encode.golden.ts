@@ -13,6 +13,8 @@ import {
 	fixtureNamed,
 	fixturePath,
 	makeWorkDir,
+	serveFixtures,
+	type FixtureServer,
 	sourceFor,
 	topLevelBoxes
 } from "./support";
@@ -32,20 +34,23 @@ const stills = profile<StillsProfile>("stills");
 const mp3 = profile<AudioProfile>("audio");
 
 let workDir: string;
+let fixtures: FixtureServer;
 
-beforeAll(() => {
+beforeAll(async () => {
 	workDir = makeWorkDir();
+	fixtures = await serveFixtures();
 });
 
-afterAll(() => {
+afterAll(async () => {
 	fs.rmSync(workDir, { recursive: true, force: true });
+	await fixtures.close();
 });
 
 async function encodeVideo(fixtureName: string, video: VideoProfile, outName: string): Promise<string> {
 	const fixture = fixtureNamed(fixtureName);
 	const out = path.join(workDir, outName);
 	await runFfmpeg(
-		buildCommand(fixturePath(fixture.name), [
+		buildCommand(fixtures.urlOf(fixture.name), [
 			{ type: "video", profile: video, source: sourceFor(fixture), outPath: out }
 		]),
 		{
@@ -63,7 +68,7 @@ describe("mp4_360 with stills in one invocation on 1080p", () => {
 		fs.mkdirSync(tmb);
 
 		await runFfmpeg(
-			buildCommand(fixturePath(fixture.name), [
+			buildCommand(fixtures.urlOf(fixture.name), [
 				{ type: "video", profile: mp4360, source: sourceFor(fixture), outPath: out },
 				{ type: "stills", profile: stills, outPath: path.join(tmb, "%04d.jpg") }
 			]),
@@ -127,7 +132,7 @@ describe("audio and image outputs", () => {
 	it("encodes mp3 at 44100 Hz stereo around 92 kbps", async () => {
 		const fixture = fixtureNamed("h1080_16x9.mp4");
 		const out = path.join(workDir, "audio.mp3");
-		await runFfmpeg(buildCommand(fixturePath(fixture.name), [{ type: "audio", profile: mp3, outPath: out }]), {
+		await runFfmpeg(buildCommand(fixtures.urlOf(fixture.name), [{ type: "audio", profile: mp3, outPath: out }]), {
 			durationSec: fixture.durationSec
 		});
 		expect(ffprobeStreams(out)[0]).toMatchObject({ codec_name: "mp3", sample_rate: "44100", channels: 2 });

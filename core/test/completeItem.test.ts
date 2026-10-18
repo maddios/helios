@@ -8,7 +8,14 @@ import {
 	usageDaily,
 	type MediaAsset
 } from "../src/models";
-import { claimItem, completeItem, dayKey, fanOut, type CallbackMessage, type ItemMessage } from "../src/pipeline";
+import {
+	claimItem,
+	completeItem,
+	dayKey,
+	createRequest,
+	type CallbackMessage,
+	type ItemMessage
+} from "../src/pipeline";
 import { queueFor } from "../src/queue";
 import { genericPreset } from "../src/presets";
 import { resetDb, startMongo, stopMongo } from "./helpers/mongo";
@@ -29,7 +36,7 @@ const videoSource: VideoSourceMetadata = {
 const asset: MediaAsset = {
 	_id: "asset-1",
 	accountId: "account-1",
-	source: { bucket: "bucket", key: "source.mp4" },
+	source: { type: "s3", bucket: "bucket", key: "source.mp4" },
 	sourceMetadata: videoSource,
 	presetName: "generic",
 	presetVersion: 1,
@@ -95,7 +102,7 @@ describe("completeItem", () => {
 		await resetDb();
 		await ensureIndexes();
 		await mediaAssets().insertOne(asset);
-		requestId = (await fanOut({ asset, mode: "encode", preset: genericPreset })).request._id;
+		requestId = (await createRequest({ asset, mode: "encode", preset: genericPreset, analyze: "sync" })).request._id;
 		jest.clearAllMocks();
 	});
 
@@ -395,7 +402,7 @@ describe("completeItem", () => {
 
 		await expect(completeAll()).rejects.toThrow();
 
-		expect(await jobReports().findOne({ requestId })).not.toHaveProperty("unitsRecordedAt");
+		expect(await jobReports().findOne({ requestId })).toBeNull();
 		expect(await usageDaily().findOne({ _id: dayKey("account-1", new Date()) })).toMatchObject({ requests: 0 });
 	});
 

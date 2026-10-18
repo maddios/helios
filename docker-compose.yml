@@ -1,0 +1,15 @@
+# Default: local/config.json points at the shared localstack (:4566) and mongodb (:27017, rs0).
+# Isolated infra: `docker compose --profile standalone up -d`, then point local/config.json at 4666 / 27117.
+services:
+  localstack:
+    image: localstack/localstack:4.14
+    profiles: ["standalone"]
+    ports:
+      - "4666:4566"
+    environment:
+      SERVICES: s3,sqs
+  mongo:
+    image: mongodb/mongodb-atlas-local:8.0
+    profiles: ["standalone"]
+    ports:
+      - "27117:27017"

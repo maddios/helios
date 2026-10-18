@@ -1,0 +1,14 @@
+{
+	"awsEndpoint": "http://localhost:4566",
+	"awsRegion": "us-east-2",
+	"awsAccessKeyId": "test",
+	"awsSecretAccessKey": "test",
+	"mongoUri": "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true",
+	"queuePrefix": "helios-local",
+	"e2eQueuePrefix": "helios-e2e",
+	"mediaBucket": "helios-local-media",
+	"lambdaMaxDurationSec": 180,
+	"lambdaMaxSourceBytes": 524288000,
+	"logLevel": "debug",
+	"sqsFairQueues": true
+}

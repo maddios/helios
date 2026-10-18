@@ -9,6 +9,7 @@ export function itemId(requestId: string, key: string): string {
 export function buildItemDocs(request: PipelineRequest, plan: PlannedItem[], now: Date): PipelineItem[] {
 	return plan.map((item) => ({
 		_id: itemId(request._id, item.key),
+		key: item.key,
 		requestId: request._id,
 		assetId: request.assetId,
 		accountId: request.accountId,

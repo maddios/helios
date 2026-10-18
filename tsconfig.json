@@ -8,6 +8,8 @@
 		"core/scripts",
 		"worker/src",
 		"worker/test",
+		"api/src",
+		"api/test",
 		"local"
 	]
 }

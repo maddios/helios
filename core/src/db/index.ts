@@ -1,4 +1,22 @@
-import { Db, MongoClient, MongoBulkWriteError, MongoServerError, type ClientSession } from "mongodb";
+import {
+	Db,
+	MongoBulkWriteError,
+	MongoClient,
+	MongoNetworkError,
+	MongoNotConnectedError,
+	MongoServerError,
+	MongoServerSelectionError,
+	MongoTopologyClosedError,
+	type ClientSession
+} from "mongodb";
+
+export {
+	MongoNetworkError,
+	MongoNetworkTimeoutError,
+	MongoNotConnectedError,
+	MongoServerSelectionError,
+	MongoTopologyClosedError
+} from "mongodb";
 
 const DB_NAME = "helios";
 const DUPLICATE_KEY_CODE = 11000;
@@ -46,4 +64,17 @@ export function isOnlyDuplicateKeyError(err: unknown): boolean {
 	}
 	const writeErrors = Array.isArray(err.writeErrors) ? err.writeErrors : [err.writeErrors];
 	return writeErrors.every((writeError) => writeError.code === DUPLICATE_KEY_CODE);
+}
+
+export async function pingDatabase(): Promise<void> {
+	await db().command({ ping: 1 });
+}
+
+export function isDatabaseUnavailableError(err: unknown): boolean {
+	return (
+		err instanceof MongoNetworkError ||
+		err instanceof MongoServerSelectionError ||
+		err instanceof MongoNotConnectedError ||
+		err instanceof MongoTopologyClosedError
+	);
 }

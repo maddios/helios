@@ -119,6 +119,7 @@ function plannedItemDocs(requestId: string, plan: PlannedItem[]): PipelineItem[]
 	const itemId = (key: string) => `${requestId}:${key}`;
 	return plan.map((item) => ({
 		_id: itemId(item.key),
+		key: item.key,
 		requestId,
 		assetId: "asset-1",
 		accountId: "account-1",

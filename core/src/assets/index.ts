@@ -5,3 +5,7 @@ export * from "./insertAsset";
 export * from "./setActiveStill";
 export * from "./errors";
 export * from "./purge";
+export * from "./findLiveAsset";
+export * from "./listAssets";
+export * from "./postProcessStatus";
+export * from "./postProcessContent";

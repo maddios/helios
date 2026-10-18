@@ -16,6 +16,12 @@ const schema = z.object({
 	uploadUrlExpirySec: z.number().int().positive(),
 	maxUploadBytes: z.number().int().positive(),
 	sourceBucket: z.string().min(1),
+	api: z.object({
+		port: z.number().int().positive(),
+		retryAfterSec: z.number().int().positive(),
+		shutdownDrainSec: z.number().int().positive(),
+		redeliverCooldownSec: z.number().int().positive()
+	}),
 	lambdaMaxDurationSec: z.number().positive(),
 	lambdaMaxSourceBytes: z.number().int().positive(),
 	sqsFairQueues: z.boolean(),
@@ -89,6 +95,10 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		IDLE_EXIT: String(config.worker.idleExit),
 		WORKER_MEMORY_MB: String(config.worker.workerMemoryMb),
 		WORKER_VCPU: String(config.worker.workerVcpu),
-		WORKER_SPOT: String(config.worker.workerSpot)
+		WORKER_SPOT: String(config.worker.workerSpot),
+		API_PORT: String(config.api.port),
+		RETRY_AFTER_SEC: String(config.api.retryAfterSec),
+		SHUTDOWN_DRAIN_SEC: String(config.api.shutdownDrainSec),
+		REDELIVER_COOLDOWN_SEC: String(config.api.redeliverCooldownSec)
 	});
 }

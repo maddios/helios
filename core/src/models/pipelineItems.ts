@@ -5,7 +5,7 @@ import {
 	ItemKindSchema,
 	ItemStatusSchema,
 	MediaAssetOutputSchema,
-	QueueNameSchema,
+	ItemQueueNameSchema,
 	UsageSchema
 } from "@helios/contracts";
 import { db } from "../db";
@@ -20,12 +20,13 @@ export type ItemOutput = z.infer<typeof ItemOutputSchema>;
 
 export const PipelineItemSchema = z.object({
 	_id: z.string(),
+	key: z.string(),
 	requestId: z.string(),
 	assetId: z.string(),
 	accountId: z.string(),
 	kind: ItemKindSchema,
 	profile: z.string().optional(),
-	queue: QueueNameSchema,
+	queue: ItemQueueNameSchema,
 	priority: z.int(),
 	messageId: z.string().optional(),
 	leaseId: z.string().optional(),

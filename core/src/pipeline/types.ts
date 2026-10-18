@@ -1,4 +1,4 @@
-import type { ItemKind, ItemStatus, QueueName, RequestStatus } from "@helios/contracts";
+import type { ItemKind, ItemQueueName, ItemStatus, RequestStatus } from "@helios/contracts";
 
 export interface Thresholds {
 	maxDurationSec: number;
@@ -14,7 +14,7 @@ export interface PlannedItem {
 	key: string;
 	kind: ItemKind;
 	profile?: string;
-	queue: QueueName;
+	queue: ItemQueueName;
 	priority: number;
 	status: "QUEUED" | "BLOCKED" | "SKIPPED";
 	dependsOn: Dependency[];

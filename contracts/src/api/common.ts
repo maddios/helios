@@ -12,7 +12,7 @@ export const CallbackUrlSchema = z
 	.describe("URL that receives callbacks; http or https only");
 
 export const PaginationQuerySchema = z.object({
-	limit: z.int().min(1).max(100).optional().describe("Maximum number of items to return"),
+	limit: z.coerce.number().int().min(1).max(100).optional().describe("Maximum number of items to return"),
 	cursor: z.string().optional().describe("Opaque cursor returned by the previous page")
 });
 export type PaginationQuery = z.infer<typeof PaginationQuerySchema>;

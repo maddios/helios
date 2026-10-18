@@ -1,4 +1,4 @@
-import { NotFoundError } from "@helios/contracts";
+import { ConflictError, NotFoundError } from "@helios/contracts";
 import { jobReports, pipelineItems, requests, type PipelineRequest } from "../models";
 import { completeItem } from "./completeItem";
 import { finalizeRequest } from "./finalizeRequest";
@@ -9,6 +9,9 @@ export async function cancelRequest(accountId: string, requestId: string): Promi
 	const request = await requests().findOne({ _id: requestId, accountId });
 	if (request === null) {
 		throw new NotFoundError(`Request ${requestId} not found`);
+	}
+	if (request.mode === "purge") {
+		throw new ConflictError("Purge requests cannot be cancelled", undefined, "purge_not_cancellable");
 	}
 	const now = new Date();
 	if (isOpenRequest(request.status)) {

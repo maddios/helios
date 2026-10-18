@@ -1,4 +1,4 @@
-import type { ItemKind, QueueName, RequestMode, SourceMetadata } from "@helios/contracts";
+import type { ItemKind, ItemQueueName, RequestMode, SourceMetadata } from "@helios/contracts";
 import type { Thresholds } from "./types";
 
 export function isShortSource(source: SourceMetadata, thresholds: Thresholds): boolean {
@@ -15,7 +15,7 @@ export interface RouteInput {
 	isShort: boolean;
 }
 
-export function routeItem({ mode, kind, isDefault, isShort }: RouteInput): QueueName {
+export function routeItem({ mode, kind, isDefault, isShort }: RouteInput): ItemQueueName {
 	if (mode === "reencode") {
 		return "fargate-p4";
 	}
@@ -25,7 +25,7 @@ export function routeItem({ mode, kind, isDefault, isShort }: RouteInput): Queue
 	return isShort ? "lambda-ai" : "fargate-p3";
 }
 
-function encodeQueue(isDefault: boolean, isShort: boolean): QueueName {
+function encodeQueue(isDefault: boolean, isShort: boolean): ItemQueueName {
 	if (!isDefault) {
 		return "fargate-p2";
 	}

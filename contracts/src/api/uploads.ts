@@ -57,6 +57,7 @@ export const MultipartCompleteRequestSchema = z
 				})
 			)
 			.min(1)
+			.max(10000)
 			.describe("Uploaded parts"),
 		encode: EncodeOptionsSchema.optional().describe("Encode the upload once it completes")
 	})

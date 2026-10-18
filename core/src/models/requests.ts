@@ -25,6 +25,7 @@ const RequestBaseSchema = z.object({
 	error: RequestErrorSchema.optional(),
 	callbackUrl: z.string().optional(),
 	completedAt: z.date().optional(),
+	lastRedeliverAt: z.date().optional(),
 	enqueuedAt: z.date().optional(),
 	createdAt: z.date()
 });

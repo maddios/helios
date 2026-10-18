@@ -1,4 +1,4 @@
-import { ConflictError, NotFoundError } from "@helios/contracts";
+import { ConflictError, NotFoundError, TooManyRequestsError } from "@helios/contracts";
 import {
 	callbackDeliveries,
 	ensureIndexes,
@@ -68,30 +68,42 @@ describe("callbacks", () => {
 
 	describe("redeliver", () => {
 		it("rejects an unknown request", async () => {
-			await expect(redeliver("acc-1", "missing")).rejects.toBeInstanceOf(NotFoundError);
+			await expect(redeliver("acc-1", "missing", 0)).rejects.toBeInstanceOf(NotFoundError);
 		});
 
 		it("rejects another account's request", async () => {
 			await requests().insertOne(request("req-1", "acc-2", "COMPLETE"));
 
-			await expect(redeliver("acc-1", "req-1")).rejects.toBeInstanceOf(NotFoundError);
+			await expect(redeliver("acc-1", "req-1", 0)).rejects.toBeInstanceOf(NotFoundError);
 			expect(mockSend).not.toHaveBeenCalled();
 		});
 
 		it("rejects a request still in progress", async () => {
 			await requests().insertOne(request("req-1", "acc-1", "IN_PROGRESS"));
 			await requests().insertOne(request("req-2", "acc-1", "ANALYZING"));
-			await expect(redeliver("acc-1", "req-2")).rejects.toBeInstanceOf(ConflictError);
+			await expect(redeliver("acc-1", "req-2", 0)).rejects.toBeInstanceOf(ConflictError);
 
-			await expect(redeliver("acc-1", "req-1")).rejects.toBeInstanceOf(ConflictError);
+			await expect(redeliver("acc-1", "req-1", 0)).rejects.toBeInstanceOf(ConflictError);
 			expect(mockSend).not.toHaveBeenCalled();
+		});
+
+		it("refuses a redelivery inside the cooldown with the seconds left", async () => {
+			await requests().insertOne(request("req-1", "acc-1", "COMPLETE"));
+			await redeliver("acc-1", "req-1", 60);
+
+			const err = await redeliver("acc-1", "req-1", 60).catch((caught: unknown) => caught);
+
+			expect(err).toBeInstanceOf(TooManyRequestsError);
+			expect(err).toMatchObject({ code: "redeliver_cooldown", httpStatus: 429 });
+			expect((err as TooManyRequestsError).retryAfterSec).toBeGreaterThan(0);
+			expect(mockSend).toHaveBeenCalledTimes(1);
 		});
 
 		it("sends a callback with a fresh deduplicationId on every call", async () => {
 			await requests().insertOne(request("req-1", "acc-1", "COMPLETE"));
 
-			await redeliver("acc-1", "req-1");
-			await redeliver("acc-1", "req-1");
+			await redeliver("acc-1", "req-1", 0);
+			await redeliver("acc-1", "req-1", 0);
 
 			expect(mockSend).toHaveBeenCalledTimes(2);
 			expect(mockSend).toHaveBeenCalledWith({

@@ -75,11 +75,16 @@ async function incrementDaily(
 	units: ResourceUnits,
 	countRequest: boolean
 ): Promise<void> {
+	const hasLlmTokens = Object.keys(units.llmTokens).length > 0;
 	await usageDaily().updateOne(
 		{ _id: dayKey(accountId, when) },
 		{
 			$inc: { ...(countRequest && { requests: 1 }), ...dailyIncrements(units) },
-			$setOnInsert: { accountId, date: when.toISOString().slice(0, 10) }
+			$setOnInsert: {
+				accountId,
+				date: when.toISOString().slice(0, 10),
+				...(!hasLlmTokens && { "units.llmTokens": {} })
+			}
 		},
 		{ upsert: true, session }
 	);

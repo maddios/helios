@@ -1,0 +1,22 @@
+{
+	"name": "@helios/api",
+	"version": "0.1.0",
+	"private": true,
+	"main": "src/app.ts",
+	"types": "src/app.ts",
+	"dependencies": {
+		"@asteasolutions/zod-to-openapi": "9.1.0",
+		"@helios/contracts": "0.1.0",
+		"@helios/core": "0.1.0",
+		"express": "5.2.1",
+		"swagger-ui-express": "5.0.1",
+		"zod": "^4.6.7"
+	},
+	"devDependencies": {
+		"@readme/openapi-parser": "2.7.0",
+		"@types/express": "5.0.6",
+		"@types/supertest": "7.2.1",
+		"@types/swagger-ui-express": "4.1.8",
+		"supertest": "7.2.2"
+	}
+}

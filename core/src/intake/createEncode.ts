@@ -2,12 +2,15 @@ import { ValidationError, type EncodeRequest } from "@helios/contracts";
 import { analyzeIfSync } from "./analyzeIfSync";
 import { loadAssetRecord, toPreset } from "./loadLiveAsset";
 import { createAsset, toAssetSource } from "./sourceAsset";
-import { createRequest } from "../pipeline";
+import { createRequest, type CreateRequestResult } from "../pipeline";
 import { requests, type Account, type MediaAsset, type PipelineRequest } from "../models";
 import { resolvePreset } from "../presetAdmin";
 import { assertPublicUrl } from "../ssrf";
 
-export async function createEncode(account: Account, input: EncodeRequest): Promise<PipelineRequest> {
+export async function createEncode(account: Account, input: EncodeRequest): Promise<CreateRequestResult> {
+	if (input.sourceMetadata !== undefined) {
+		throw new ValidationError("sourceMetadata is only accepted with dryRun");
+	}
 	if (input.analyze === "sync" && "url" in input.source) {
 		throw new ValidationError('analyze "sync" cannot be used with a url source');
 	}
@@ -16,7 +19,7 @@ export async function createEncode(account: Account, input: EncodeRequest): Prom
 	}
 	const preset = toPreset(await resolvePreset(account._id, input.preset));
 	const asset = await encodeAsset(account, input);
-	const { request } = await createRequest({
+	const result = await createRequest({
 		requestId: input.requestId,
 		asset,
 		mode: "encode",
@@ -25,7 +28,7 @@ export async function createEncode(account: Account, input: EncodeRequest): Prom
 		...(input.callbackUrl !== undefined && { callbackUrl: input.callbackUrl }),
 		analyze: input.analyze
 	});
-	return analyzeIfSync(request, input.analyze);
+	return { ...result, request: await analyzeIfSync(result.request, input.analyze) };
 }
 
 async function encodeAsset(account: Account, input: EncodeRequest): Promise<MediaAsset> {

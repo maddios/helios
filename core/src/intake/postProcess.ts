@@ -1,5 +1,5 @@
 import type { AssetPostProcessRequest } from "@helios/contracts";
-import { createRequest } from "../pipeline";
+import { createRequest, type CreateRequestResult } from "../pipeline";
 import type { Account, PipelineRequest } from "../models";
 import { assertPublicUrl } from "../ssrf";
 import { loadLiveAsset, snapshotOf } from "./loadLiveAsset";
@@ -8,12 +8,12 @@ export async function postProcess(
 	account: Account,
 	assetId: string,
 	input: AssetPostProcessRequest
-): Promise<PipelineRequest> {
+): Promise<CreateRequestResult> {
 	const asset = await loadLiveAsset(account, assetId);
 	if (input.callbackUrl !== undefined) {
 		await assertPublicUrl(input.callbackUrl);
 	}
-	const { request } = await createRequest({
+	const result = await createRequest({
 		requestId: input.requestId,
 		asset,
 		mode: "postProcess",
@@ -22,5 +22,5 @@ export async function postProcess(
 		...(input.callbackUrl !== undefined && { callbackUrl: input.callbackUrl }),
 		analyze: "async"
 	});
-	return request;
+	return result;
 }

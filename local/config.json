@@ -30,11 +30,17 @@
 	},
 	"analyze": {
 		"ffprobePath": "ffprobe",
-		"analyzeTimeoutSec": 60,
+		"analyzeTimeoutSec": 45,
 		"sourceUrlTtlSec": 3600,
 		"maxIngestBytes": 524288000,
 		"ingestTimeoutSec": 30
 	},
 	"sourceBucket": "helios-local-sources",
-	"ssrfAllowedHosts": "localhost,127.0.0.1"
+	"ssrfAllowedHosts": "localhost,127.0.0.1",
+	"api": {
+		"port": 3100,
+		"retryAfterSec": 5,
+		"shutdownDrainSec": 25,
+		"redeliverCooldownSec": 60
+	}
 }

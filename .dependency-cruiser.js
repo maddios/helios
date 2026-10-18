@@ -28,6 +28,13 @@ module.exports = {
 			to: { path: "^core/src/(?!index\\.ts$|[^/]+/index\\.ts$)" }
 		},
 		{
+			name: "api-imports-core-and-contracts-via-index-only",
+			comment: "api/ imports core and contracts only through their index.ts files",
+			severity: "error",
+			from: { path: "^api/" },
+			to: { path: "^(core|contracts)/src/(?!index\\.ts$|[^/]+/index\\.ts$|api/index\\.ts$)" }
+		},
+		{
 			name: "contracts-is-a-leaf",
 			severity: "error",
 			from: { path: "^contracts/" },

@@ -2,7 +2,7 @@ import type { RequestError, RequestStatus } from "@helios/contracts";
 import { jobReports, requests, type PipelineRequest } from "../models";
 import { sendCallback } from "./callbacks";
 import { summarizeUsage } from "./usageSummary";
-import { settledUnits, storeReportOnce, loadItems } from "./unitsLedger";
+import { loadItems, recordItemUnits, settledUnits, storeReportOnce } from "./unitsLedger";
 import { OPEN_REQUEST_STATUSES } from "./types";
 import { toReportItems } from "./reportItems";
 
@@ -29,6 +29,7 @@ export async function finalizeRequest(
 	if (report === null) {
 		throw new Error(`Job report for request ${request._id} is missing after finalize`);
 	}
+	await recordLateUnits(request._id);
 	await sendCallback({ type: "request", requestId: request._id }, `${request._id}:final`);
 	await requests().updateOne(
 		{ _id: request._id, status: { $in: [...OPEN_REQUEST_STATUSES] } },
@@ -40,4 +41,10 @@ export async function finalizeRequest(
 			}
 		}
 	);
+}
+
+async function recordLateUnits(requestId: string): Promise<void> {
+	for (const item of await loadItems(requestId)) {
+		await recordItemUnits(item);
+	}
 }

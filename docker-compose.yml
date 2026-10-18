@@ -23,3 +23,13 @@ services:
     volumes:
       - ./local:/app/local:ro
     command: ["npx", "tsx", "local/runWorker.ts"]
+  helios-api:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      target: test
+    init: true
+    network_mode: host
+    volumes:
+      - ./local:/app/local:ro
+    command: ["npx", "tsx", "local/runApi.ts"]

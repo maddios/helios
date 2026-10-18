@@ -65,3 +65,13 @@ export const ErrorBodySchema = z
 	})
 	.meta({ id: "ErrorBody" });
 export type ErrorBody = z.infer<typeof ErrorBodySchema>;
+
+export class TooManyRequestsError extends HeliosError {
+	constructor(
+		code: string,
+		message: string,
+		readonly retryAfterSec: number
+	) {
+		super(code, 429, message);
+	}
+}

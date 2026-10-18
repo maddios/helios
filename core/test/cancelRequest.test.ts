@@ -21,6 +21,27 @@ describe("cancelRequest", () => {
 		await ensureIndexes();
 	});
 
+	it("rejects cancelling a purge request with ConflictError", async () => {
+		await requests().insertOne({
+			_id: REQUEST_ID,
+			clientRequestId: REQUEST_ID,
+			accountId: "account-1",
+			assetId: "asset-1",
+			mode: "purge",
+			analyze: "async",
+			assetVersion: 1,
+			pendingItems: [],
+			status: "IN_PROGRESS",
+			createdAt: new Date()
+		});
+
+		await expect(cancelRequest("account-1", REQUEST_ID)).rejects.toMatchObject({
+			code: "purge_not_cancellable",
+			httpStatus: 409
+		});
+		expect((await requests().findOne({ _id: REQUEST_ID }))?.status).toBe("IN_PROGRESS");
+	});
+
 	it("throws NotFoundError for a request of another account", async () => {
 		await insertStoredRequest(REQUEST_ID);
 		await expect(cancelRequest("account-2", REQUEST_ID)).rejects.toBeInstanceOf(NotFoundError);

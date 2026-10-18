@@ -19,3 +19,4 @@ export * from "./cancelRequest";
 export * from "./requestPurge";
 export * from "./loadRequest";
 export * from "./enqueueAnalyze";
+export { loadItems } from "./unitsLedger";

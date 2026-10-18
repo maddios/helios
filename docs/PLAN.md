@@ -561,6 +561,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - `Authorization: Bearer <key>`.
 - **Account keys** are `sk_live_` + 32 random bytes in base62. They are stored as SHA-256 with a unique index, and only a 12-char prefix is kept for display. `lastUsedAt` updates are throttled to once a minute.
 - **Admin keys** are `sk_admin_…` in the same collection with `scope: "admin"` and no `accountId`.
+- The `Bearer` scheme is matched case-insensitively.
 - The first admin key comes from `npm run admin:bootstrap`, a one-time script that refuses to run if an admin key exists. Everything else goes through the Admin API.
 
 **Account API** (account keys). Request and response schemas live in `contracts` and generate OpenAPI at `/docs` + `/openapi.json`.
@@ -568,12 +569,14 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 | Area | Routes |
 |---|---|
 | Encoding | `POST /encode` (`?dryRun=true` with an S3 or upload source probes without writing, or the body supplies `sourceMetadata`), `POST /assets/:id/re-encode` (`refreshPreset`), `POST /assets/:id/post-process` |
-| Uploads | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
+| Uploads | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode, status rules below), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
 | Assets | `GET /assets` (by `externalId`, cursor), `GET /assets/:id` (outputs with CDN URLs `CDN_BASE_URL/{key}?v={version}`, `postProcess` status, `activeStill`), `PATCH /assets/:id/active-still`, `DELETE /assets/:id` (202, purge), `GET /assets/:id/transcripts`, `GET /assets/:id/scenes` |
-| Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` |
+| Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel; 409 for purge requests), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` (429 `redeliver_cooldown` inside `REDELIVER_COOLDOWN_SEC`) |
 | Presets | per "Preset management API" (account presets; system presets are read and clone only) |
-| Usage | `GET /usage?from&to` (reads `usage_daily`) |
-| Health | `GET /health` (no auth) |
+| Usage | `GET /usage?from&to` (reads `usage_daily`; `from <= to`, span at most 366 days) |
+| Health | `GET /health` (process liveness only, no auth, no database); `GET /ready` (pings Mongo, no auth, for monitoring) |
+
+`GET /openapi.json` and `GET /docs` require any valid account or admin key. Every route answers 503 `service_unavailable` with `Retry-After` (`RETRY_AFTER_SEC`) when Mongo is unavailable.
 
 **Admin API** (admin keys):
 - `POST/GET/PATCH /admin/accounts` (slug, name, `sourceBuckets`, `callbackUrl`, `features`);
@@ -600,6 +603,19 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Seeds:** `npm run seed:presets` upserts the `generic` system preset.
 - **Local:** `npm run local:api`, plus a compose service `helios-api` (host network), and an e2e that drives the full HTTP flow. That flow is: admin creates account + key → upload → encode (sync and async) → drain the queues → GET asset → cancel → purge.
 - The Copilot manifest is deferred to step 9.
+
+**Step 3 deviations (as built):**
+- Mongo network and server-selection errors map to 503 `service_unavailable` on every route, not only write paths, with `Retry-After` (`RETRY_AFTER_SEC`). Approved by the user on 2026-10-18.
+- `RequestView.postProcess` is optional and absent for purge requests. `AssetView.sourceMetadata` omits the raw `probe`.
+- `POST /uploads/multipart/{uploadId}/complete` without `encode` returns 200 `{ uploadKey }`. With `encode` it returns `{ uploadKey, request }` and follows the `/encode` status rules: **201** sync, **202** async, **200** repeated `requestId`, and **422** with the sync failure codes (`details: { requestId, assetId }`). Approved by the user on 2026-10-18.
+- `sourceMetadata` is accepted only with `dryRun=true` (encode and multipart-complete encode options); otherwise 400.
+- Preset routes add `POST /presets/{name}/profiles`, `DELETE /presets/{name}/profiles/{profile}`, `POST /presets/{name}/clone` and `POST /presets/{name}/dry-run`. Admin presets are CRUD only.
+- `GET /usage` required `usage_daily.units.llmTokens`, which was never written when an account had no LLM usage. The first increment now seeds it with `$setOnInsert`.
+- `limit` on list routes is coerced from the query string (`z.coerce`), since query values arrive as strings.
+- Sync analysis is capped at `ANALYZE_TIMEOUT_SEC <= 45`, validated at API startup. The server sets `keepAliveTimeout` to 65s and `headersTimeout` to 66s. The step 9 load balancer must keep its idle timeout at 60s, above the sync budget and below the keep-alive.
+- `SIGTERM` and `SIGINT` stop accepting connections, close idle connections and let in-flight requests finish for `SHUTDOWN_DRAIN_SEC`. After that, open connections are closed, then Mongo closes and the process exits.
+- Usage ranges are capped at 366 days; the range check runs on both `/usage` routes.
+- The OpenAPI document is emitted as 3.0.3 (`OpenApiGeneratorV3`), so the Jest validator (`@readme/openapi-parser`) can load in CommonJS.
 
 ## Local development & testing
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
@@ -683,6 +699,18 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **Commit (step 1):** on a `feat/scaffold-core` branch, then check in before step 2.
 
 ## Implementation decisions log
+- **2026-10-18 (step 3 API review, user decisions):**
+  - A. Mongo unavailability answers 503 on every route with `Retry-After` (`RETRY_AFTER_SEC`, required). Approved as the deviation above.
+  - B. `/docs` and `/openapi.json` require any valid account or admin key.
+  - C. `/health` is process liveness only. `/ready` pings Mongo with no auth.
+  - D. Upload-and-encode (multipart complete with `encode`) uses the `/encode` status rules: 201 sync, 202 async, 200 repeat, 422 sync failure. The same reply mapping is shared.
+  - E. Sync analysis is capped at `ANALYZE_TIMEOUT_SEC <= 45` for the API process. `keepAliveTimeout` is 65s and `headersTimeout` is 66s. ALB idle timeout is 60s (step 9).
+  - Redelivery is throttled per request by `REDELIVER_COOLDOWN_SEC` (required), stored as `lastRedeliverAt`. A repeat inside the cooldown answers 429 `redeliver_cooldown` with `Retry-After`.
+  - Cancelling a purge request is a 409 `purge_not_cancellable`.
+  - Finalize records units for every terminal item after the job report exists, so an item that settles between the read and the report write is counted once.
+  - `pipeline_items` carry a stored `key`. The API no longer slices `_id`.
+  - Driver errors are classified with `instanceof` (`MongoNetworkError`, `MongoServerSelectionError`, `MongoNotConnectedError`, `MongoTopologyClosedError`). Core re-exports the driver classes so tests share one `mongodb` copy with core.
+  - Build outputs are `dist/api/main.js` and `dist/worker/main.js`.
 - **2026-10-17:** Mongo layer: raw `mongodb` v6 driver + zod.
 - **2026-10-17:** Repo: npm workspaces monorepo (`contracts`, `core`, `api`, `functions`, `worker`, `sdk`).
 - **2026-10-17:** TypeScript 6.0 (ts-jest doesn't support TS 7 yet).
@@ -730,3 +758,10 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Ingest stores `application/octet-stream`. The probe JSON drops `format.filename`. ffprobe stderr is captured into the error, with the source URL redacted.
   - A request is `ERROR` with a `{code, message}` error. A repeat of an ANALYZING async request re-enqueues analyze (idempotent), and launches once the asset is analyzed.
   - Upload keys bind to one asset via a partial unique index on `media_assets.source.key` (type upload).
+- **2026-10-18 (step 3 API libraries):**
+  - Express 5.2.1, pinned. 5.3.0 was published 2026-10-09, less than two weeks before this entry.
+  - `@asteasolutions/zod-to-openapi` 9.1.0, the zod 4 peer. Schemas stay in `contracts`, and the same endpoint specs drive routing, validation and OpenAPI.
+  - `swagger-ui-express` 5.0.1 serves `/docs`, self-hosted with no CDN. It is external in the esbuild bundle and installed at its pinned version in the runtime image, like `sharp`.
+  - Tests: `supertest` 7.2.2 with `@types/supertest` 7.2.1. OpenAPI validation uses `@readme/openapi-parser` 2.7.0, because `@apidevtools/swagger-parser` 13 is ESM-only under Jest 30.
+  - `@types/express` 5.0.6 and `@types/swagger-ui-express` 4.1.8.
+  - The API image is built from `api/Dockerfile`, pinned to the same base and ffmpeg digests as the worker. The runtime carries only `ffprobe`.

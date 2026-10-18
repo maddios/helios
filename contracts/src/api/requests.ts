@@ -42,7 +42,9 @@ export const RequestViewSchema = z
 		mode: RequestModeSchema.describe("What the request does"),
 		status: RequestStatusSchema.describe("Current request status"),
 		clientRequestId: z.string().optional().describe("Client idempotency key supplied at creation"),
-		postProcess: ResolvedPostProcessSchema.describe("Post-processing options in effect"),
+		postProcess: ResolvedPostProcessSchema.optional().describe(
+			"Post-processing options in effect; absent for purge requests"
+		),
 		assetVersion: z.int().describe("Asset version the request produces"),
 		items: z.array(RequestItemViewSchema).describe("Pipeline items of the request"),
 		progress: RequestProgressSchema.describe("Item progress counts"),

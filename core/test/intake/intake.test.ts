@@ -105,9 +105,9 @@ describe("intake", () => {
 
 		it("returns the same request for a repeated requestId without a second asset", async () => {
 			const requestId = "11111111-2222-4333-8444-555555555555";
-			const first = await createEncode(ACCOUNT, encodeInput({ requestId }));
+			const first = (await createEncode(ACCOUNT, encodeInput({ requestId }))).request;
 
-			const second = await createEncode(ACCOUNT, encodeInput({ requestId }));
+			const second = (await createEncode(ACCOUNT, encodeInput({ requestId }))).request;
 
 			expect(second._id).toBe(first._id);
 			expect(await mediaAssets().countDocuments({})).toBe(1);
@@ -116,7 +116,7 @@ describe("intake", () => {
 		it("returns the ERROR request with its code when a sync analysis fails", async () => {
 			jest.mocked(probeSource).mockRejectedValue(new UnprocessableSourceError("Source has no video or image stream"));
 
-			const request = await createEncode(ACCOUNT, encodeInput({ analyze: "sync" }));
+			const { request } = await createEncode(ACCOUNT, encodeInput({ analyze: "sync" }));
 
 			expect(request).toMatchObject({
 				status: "ERROR",

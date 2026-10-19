@@ -18,6 +18,7 @@ export class TranslationMismatchError extends Error {
 export interface TranslateInput {
 	segments: TranscriptSegment[];
 	sourceLanguage: string;
+	targetLanguage: string;
 	meter: UsageMeter;
 	signal: AbortSignal;
 }
@@ -30,6 +31,7 @@ export interface TranslationResult {
 export async function translateSegments({
 	segments,
 	sourceLanguage,
+	targetLanguage,
 	meter,
 	signal
 }: TranslateInput): Promise<TranslationResult> {
@@ -37,7 +39,9 @@ export async function translateSegments({
 	const translated: TranscriptSegment[] = [];
 	for (const batch of batches(segments, TRANSLATE_BATCH_SEGMENTS)) {
 		signal.throwIfAborted();
-		translated.push(...(await translateBatch({ batch, sourceLanguage, effort: TRANSLATE_EFFORT, meter, signal })));
+		translated.push(
+			...(await translateBatch({ batch, sourceLanguage, targetLanguage, effort: TRANSLATE_EFFORT, meter, signal }))
+		);
 	}
 	return { segments: translated, model: CHAT_MODELS[TRANSLATE_EFFORT] };
 }
@@ -45,6 +49,7 @@ export async function translateSegments({
 interface BatchInput {
 	batch: TranscriptSegment[];
 	sourceLanguage: string;
+	targetLanguage: string;
 	effort: ModelEffort;
 	meter: UsageMeter;
 	signal: AbortSignal;
@@ -53,13 +58,14 @@ interface BatchInput {
 async function translateBatch({
 	batch,
 	sourceLanguage,
+	targetLanguage,
 	effort,
 	meter,
 	signal
 }: BatchInput): Promise<TranscriptSegment[]> {
 	const { segments } = await chatJson({
 		effort,
-		system: translationSystemPrompt(sourceLanguage),
+		system: translationSystemPrompt(sourceLanguage, targetLanguage),
 		user: translationUserContent(batch.map((segment, index) => ({ index, text: segment.text }))),
 		schema: TranslationBatchSchema,
 		schemaName: "translated_segments",

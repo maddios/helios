@@ -27,7 +27,10 @@ import { queueFor } from "../../src/queue";
 
 export const SENT_QUEUES: QueueName[] = ["lambda-p1", "fargate-p2", "lambda-ai"];
 export const thresholds = { maxDurationSec: 180, maxSourceBytes: 524288000 };
-export const allPostProcess: ResolvedPostProcess = { transcribe: { translateToEnglish: true }, sceneDetection: true };
+export const allPostProcess: ResolvedPostProcess = {
+	transcribe: { translations: [], english: true, retranscribe: false },
+	sceneDetection: true
+};
 
 export const videoSource: VideoSourceMetadata = {
 	type: "video",

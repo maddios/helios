@@ -23,7 +23,7 @@ function echoTranslation(user: string) {
 }
 
 function input(segments = SEGMENTS, signal = new AbortController().signal) {
-	return { segments, sourceLanguage: "spanish", meter: new UsageMeter(), signal };
+	return { segments, sourceLanguage: "es", targetLanguage: "en", meter: new UsageMeter(), signal };
 }
 
 describe("translateSegments", () => {
@@ -74,7 +74,7 @@ describe("translateSegments", () => {
 			meter: request.meter,
 			signal: request.signal
 		});
-		expect(chatJsonMock.mock.calls[0][0].system).toContain("from spanish to English");
+		expect(chatJsonMock.mock.calls[0][0].system).toContain("from spanish to english");
 	});
 
 	it("stops before the next batch when the signal is aborted", async () => {
@@ -87,6 +87,12 @@ describe("translateSegments", () => {
 
 		await expect(translateSegments(input(SEGMENTS, controller.signal))).rejects.toBe(reason);
 		expect(chatJsonMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("names the target language in the prompt", async () => {
+		await translateSegments({ ...input(SEGMENTS.slice(0, 1)), targetLanguage: "fr" });
+
+		expect(chatJsonMock.mock.calls[0][0].system).toContain("from spanish to french.");
 	});
 
 	it("returns nothing and calls nothing for an empty transcript", async () => {

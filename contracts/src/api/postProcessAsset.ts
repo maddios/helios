@@ -8,5 +8,8 @@ export const AssetPostProcessRequestSchema = z
 		requestId: z.uuid().optional().describe("Client idempotency key, stored as clientRequestId")
 	})
 	.and(DestinationInputSchema)
-	.meta({ id: "AssetPostProcessRequest" });
+	.meta({
+		id: "AssetPostProcessRequest",
+		example: { postProcess: { transcribe: { translations: ["de"] } } }
+	});
 export type AssetPostProcessRequest = z.infer<typeof AssetPostProcessRequestSchema>;

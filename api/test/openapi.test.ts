@@ -82,6 +82,18 @@ describe("OpenAPI document", () => {
 		expect(res.body.paths["/docs"].get.security).toEqual([{ accountKey: [] }, { adminKey: [] }]);
 	});
 
+	it("documents the transcribe examples as OpenAPI 3.0 schema examples", async () => {
+		const res = await fetchDocument();
+		const transcribeExample = { language: "pt", english: false, translations: ["es"] };
+		const postProcessExample = { transcribe: { translations: ["es", "fr"] } };
+
+		expect(res.body.components.schemas.AssetPostProcessRequest.example).toEqual({
+			postProcess: { transcribe: { translations: ["de"] } }
+		});
+		expect(res.text).toContain(`"example":${JSON.stringify(transcribeExample)}`);
+		expect(res.text).toContain(`"example":${JSON.stringify(postProcessExample)}`);
+	});
+
 	it("declares account and admin security schemes", async () => {
 		const res = await fetchDocument();
 

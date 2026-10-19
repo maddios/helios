@@ -51,6 +51,7 @@ suite("OpenAI real API", () => {
 		const translated = await translateSegments({
 			segments: native.segments,
 			sourceLanguage: native.language,
+			targetLanguage: "en",
 			meter,
 			signal
 		});

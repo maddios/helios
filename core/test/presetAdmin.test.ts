@@ -364,7 +364,7 @@ describe("presetAdmin", () => {
 					hasAudio: true,
 					sizeBytes: 1000000
 				} satisfies SourceMetadata,
-				postProcess: { transcribe: { translateToEnglish: true }, sceneDetection: false },
+				postProcess: { transcribe: { translations: [], english: true, retranscribe: false }, sceneDetection: false },
 				mode: "encode"
 			});
 			expect(items).toContainEqual(expect.objectContaining({ key: "mp4_360", kind: "encode" }));

@@ -17,7 +17,8 @@ const shared = {
 	TRANSCRIBE_CHUNK_SEC: z.coerce.number().int().positive(),
 	TRANSCRIBE_OVERLAP_SEC: z.coerce.number().int().nonnegative(),
 	TRANSLATE_EFFORT: z.enum(["low", "medium", "high"]),
-	TRANSLATE_BATCH_SEGMENTS: z.coerce.number().int().positive()
+	TRANSLATE_BATCH_SEGMENTS: z.coerce.number().int().positive(),
+	TRANSLATE_TARGET_CONCURRENCY: z.coerce.number().int().positive()
 };
 
 const fargateSchema = z.object({

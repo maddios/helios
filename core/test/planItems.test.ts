@@ -9,7 +9,10 @@ import { genericPreset } from "../src/presets";
 import { planItems } from "../src/pipeline";
 
 const thresholds = { maxDurationSec: 180, maxSourceBytes: 524288000 };
-const allPostProcess: ResolvedPostProcess = { transcribe: { translateToEnglish: true }, sceneDetection: true };
+const allPostProcess: ResolvedPostProcess = {
+	transcribe: { translations: [], english: true, retranscribe: false },
+	sceneDetection: true
+};
 
 function video(overrides: Partial<VideoSourceMetadata> = {}): VideoSourceMetadata {
 	return {

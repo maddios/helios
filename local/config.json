@@ -38,7 +38,8 @@
 			"chunkSec": 1200,
 			"overlapSec": 5,
 			"translateEffort": "low",
-			"translateBatchSegments": 40
+			"translateBatchSegments": 40,
+			"translateTargetConcurrency": 3
 		}
 	},
 	"analyze": {

@@ -19,3 +19,4 @@ process.env.TRANSCRIBE_CHUNK_SEC = "1200";
 process.env.TRANSCRIBE_OVERLAP_SEC = "5";
 process.env.TRANSLATE_EFFORT = "low";
 process.env.TRANSLATE_BATCH_SEGMENTS = "40";
+process.env.TRANSLATE_TARGET_CONCURRENCY = "3";

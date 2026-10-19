@@ -195,8 +195,59 @@ describe("re-encode and post-process", () => {
 
 		expect(res.status).toBe(202);
 		expect(res.body).toMatchObject({ mode: "postProcess" });
-		expect(res.body.postProcess.transcribe).toMatchObject({ translateToEnglish: true });
+		expect(res.body.postProcess.transcribe).toMatchObject({ english: true });
 		expect(await requests().countDocuments({ accountId, mode: "postProcess" })).toBe(1);
 		expect(await mediaAssets().countDocuments({ accountId })).toBe(1);
+	});
+
+	it("accepts up to 20 translations and rejects 21 with 400", async () => {
+		const asset = await seedAsset(accountId);
+		const post = (translations: string[]) =>
+			request(app)
+				.post(`/assets/${asset._id}/post-process`)
+				.set("Authorization", bearer(key))
+				.send({ postProcess: { transcribe: { translations } } });
+		const codes = [
+			"fr",
+			"de",
+			"it",
+			"pl",
+			"nl",
+			"es",
+			"pt",
+			"sv",
+			"da",
+			"fi",
+			"no",
+			"cs",
+			"ro",
+			"hu",
+			"el",
+			"tr",
+			"ru",
+			"uk",
+			"ja",
+			"ko"
+		];
+
+		const tooMany = await post([...codes, "sk"]);
+		const atLimit = await post(codes);
+
+		expect(tooMany.status).toBe(400);
+		expect(atLimit.status).toBe(202);
+	});
+
+	it("rejects unknown translation codes with 400 and lists them", async () => {
+		const asset = await seedAsset(accountId);
+
+		const res = await request(app)
+			.post(`/assets/${asset._id}/post-process`)
+			.set("Authorization", bearer(key))
+			.send({ postProcess: { transcribe: { translations: ["fr", "xx", "zz"] } } });
+
+		expect(res.status).toBe(400);
+		expect(res.body.error.message).toBe("Unsupported transcription languages: xx, zz");
+		expect(res.body.error.details).toEqual({ languages: ["xx", "zz"] });
+		expect(await requests().countDocuments({ accountId, mode: "postProcess" })).toBe(0);
 	});
 });

@@ -118,3 +118,11 @@ export function languageCode(name: string): string {
 	}
 	return CODES_BY_NAME[key];
 }
+
+export function languageNameOf(code: string): string {
+	const name = languageName(code);
+	if (name === undefined) {
+		throw new UnknownLanguageError(code);
+	}
+	return name;
+}

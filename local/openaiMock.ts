@@ -3,8 +3,9 @@ import http from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { languageName } from "@helios/core";
+import { languageCode, languageName } from "@helios/core";
 import { loadLocalConfig } from "./loadConfig";
 
 const execFileAsync = promisify(execFile);
@@ -13,6 +14,7 @@ const CHAT_PATH = "/v1/chat/completions";
 const SEGMENT_SEC = 5;
 const LEAD_IN_SEC = 0.5;
 const CHARS_PER_TOKEN = 4;
+const CHAT_DELAY_MS = 25;
 
 export interface MockFailure {
 	path: typeof TRANSCRIPTIONS_PATH | typeof CHAT_PATH;
@@ -22,6 +24,8 @@ export interface MockFailure {
 
 export interface OpenAiMock {
 	setFailures(failures: MockFailure[]): void;
+	requestCount(path: MockFailure["path"]): number;
+	peakChatConcurrency(): number;
 	close(): Promise<void>;
 }
 
@@ -35,10 +39,18 @@ interface Reply {
 	body: unknown;
 }
 
+interface ChatStats {
+	inFlight: number;
+	peak: number;
+}
+
 export async function startOpenAiMock({ port, language }: OpenAiMockOptions): Promise<OpenAiMock> {
 	let failures: MockFailure[] = [];
+	const requests = new Map<string, number>();
+	const chat: ChatStats = { inFlight: 0, peak: 0 };
 	const server = http.createServer(async (req, res) => {
-		const reply = await route(req, await readBody(req), language, failures).catch((err: unknown): Reply => ({
+		requests.set(req.url ?? "", (requests.get(req.url ?? "") ?? 0) + 1);
+		const reply = await route(req, await readBody(req), { language, failures, chat }).catch((err: unknown): Reply => ({
 			status: 500,
 			body: { error: { message: String(err) } }
 		}));
@@ -49,6 +61,8 @@ export async function startOpenAiMock({ port, language }: OpenAiMockOptions): Pr
 		setFailures: (next) => {
 			failures = next.map((rule) => ({ ...rule }));
 		},
+		requestCount: (path) => requests.get(path) ?? 0,
+		peakChatConcurrency: () => chat.peak,
 		close: () =>
 			new Promise<void>((resolve) => {
 				server.closeAllConnections();
@@ -57,11 +71,16 @@ export async function startOpenAiMock({ port, language }: OpenAiMockOptions): Pr
 	};
 }
 
+interface RouteContext {
+	language: string;
+	failures: MockFailure[];
+	chat: ChatStats;
+}
+
 async function route(
 	req: http.IncomingMessage,
 	body: Buffer,
-	language: string,
-	failures: MockFailure[]
+	{ language, failures, chat }: RouteContext
 ): Promise<Reply> {
 	const forced = takeFailure(failures, req.url);
 	if (forced !== undefined) {
@@ -71,9 +90,20 @@ async function route(
 		return { status: 200, body: await transcription(body, req.headers["content-type"] ?? "", language) };
 	}
 	if (req.method === "POST" && req.url === CHAT_PATH) {
-		return { status: 200, body: chatCompletion(body) };
+		return { status: 200, body: await chatReply(body, chat) };
 	}
 	return { status: 404, body: { error: { message: `no mock for ${req.method} ${req.url}` } } };
+}
+
+async function chatReply(body: Buffer, chat: ChatStats) {
+	chat.inFlight += 1;
+	chat.peak = Math.max(chat.peak, chat.inFlight);
+	try {
+		await delay(CHAT_DELAY_MS);
+		return chatCompletion(body);
+	} finally {
+		chat.inFlight -= 1;
+	}
 }
 
 function takeFailure(failures: MockFailure[], url: string | undefined): MockFailure | undefined {
@@ -122,15 +152,20 @@ function segmentsFor(duration: number) {
 	return segments;
 }
 
+const TARGET_PATTERN = / to ([^.]+)\./;
+
 function chatCompletion(body: Buffer) {
 	const request = JSON.parse(body.toString("utf8")) as { model: string; messages: { role: string; content: string }[] };
+	const system = request.messages.find((message) => message.role === "system");
 	const user = request.messages.find((message) => message.role === "user");
-	if (user === undefined) {
-		throw new Error("chat request has no user message");
+	const target = TARGET_PATTERN.exec(system?.content ?? "")?.[1];
+	if (user === undefined || target === undefined) {
+		throw new Error("chat request has no user message or target language");
 	}
+	const prefix = languageCode(target).toUpperCase();
 	const { segments } = JSON.parse(user.content) as { segments: { index: number; text: string }[] };
 	const content = JSON.stringify({
-		segments: segments.map((segment) => ({ index: segment.index, text: `EN: ${segment.text}` }))
+		segments: segments.map((segment) => ({ index: segment.index, text: `${prefix}: ${segment.text}` }))
 	});
 	return {
 		id: "chatcmpl-mock",

@@ -50,7 +50,8 @@ const schema = z.object({
 			chunkSec: z.number().int().positive(),
 			overlapSec: z.number().int().nonnegative(),
 			translateEffort: z.enum(["low", "medium", "high"]),
-			translateBatchSegments: z.number().int().positive()
+			translateBatchSegments: z.number().int().positive(),
+			translateTargetConcurrency: z.number().int().positive()
 		})
 	}),
 	openai: z.object({
@@ -155,6 +156,7 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		TRANSCRIBE_OVERLAP_SEC: String(config.worker.transcribe.overlapSec),
 		TRANSLATE_EFFORT: config.worker.transcribe.translateEffort,
 		TRANSLATE_BATCH_SEGMENTS: String(config.worker.transcribe.translateBatchSegments),
+		TRANSLATE_TARGET_CONCURRENCY: String(config.worker.transcribe.translateTargetConcurrency),
 		...openAiEnv(config.openai, e2e),
 		API_PORT: String(config.api.port),
 		RETRY_AFTER_SEC: String(config.api.retryAfterSec),

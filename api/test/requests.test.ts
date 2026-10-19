@@ -44,7 +44,7 @@ describe("requests", () => {
 		expect(res.body.items.length).toBeGreaterThan(0);
 		expect(res.body.items[0]).toMatchObject({ id: expect.stringContaining(id), key: expect.any(String) });
 		expect(res.body.progress).toMatchObject({ total: res.body.items.length, finished: 0 });
-		expect(res.body.postProcess).toMatchObject({ sceneDetection: true, transcribe: { translateToEnglish: true } });
+		expect(res.body.postProcess).toMatchObject({ sceneDetection: true, transcribe: { english: true } });
 	});
 
 	it("returns 404 for another account's request", async () => {

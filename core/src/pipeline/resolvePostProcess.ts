@@ -3,6 +3,7 @@ import {
 	type PostProcessDefaults,
 	type PostProcessRequest,
 	type ResolvedPostProcess,
+	type ResolvedTranscribe,
 	type TranscribeOptions
 } from "@helios/contracts";
 import { LANGUAGE_CODES } from "../ai";
@@ -19,13 +20,21 @@ export function resolvePostProcess(
 
 function resolveTranscribe(value: boolean | TranscribeOptions): ResolvedPostProcess["transcribe"] {
 	if (typeof value === "boolean") {
-		return value ? { translateToEnglish: true } : false;
+		return value ? { translations: [], english: true, retranscribe: false } : false;
 	}
-	if (value.language !== undefined && !LANGUAGE_CODES.has(value.language)) {
-		throw new ValidationError(`Unsupported transcription language: ${value.language}`, { language: value.language });
-	}
+	const translations = value.translations ?? [];
+	assertKnownCodes([value.language, ...translations]);
 	return {
 		...(value.language !== undefined && { language: value.language }),
-		translateToEnglish: value.translateToEnglish ?? true
-	};
+		translations: [...new Set(translations)],
+		english: value.english ?? true,
+		retranscribe: value.retranscribe ?? false
+	} satisfies ResolvedTranscribe;
+}
+
+function assertKnownCodes(codes: (string | undefined)[]): void {
+	const unknown = [...new Set(codes)].filter((code): code is string => code !== undefined && !LANGUAGE_CODES.has(code));
+	if (unknown.length > 0) {
+		throw new ValidationError(`Unsupported transcription languages: ${unknown.join(", ")}`, { languages: unknown });
+	}
 }

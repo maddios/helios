@@ -168,7 +168,7 @@
 
 ```ts
 postProcess?: {
-  transcribe?: boolean | { language?: string /* ISO hint */, translateToEnglish?: boolean /* default true */ }
+  transcribe?: boolean | { language?: string /* ISO hint */, translations?: string[] /* extra targets, max 20 */, english?: boolean /* default true */, retranscribe?: boolean /* default false */ }
   sceneDetection?: boolean
 }
 ```
@@ -768,6 +768,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 ## Step 5 design: transcription
 
 **AI client (`core/src/ai/`)**, modelled on bella `helpers/gpt.ts`:
+
 - Uses native `fetch` against `OPENAI_BASE_URL` (required config: `https://api.openai.com/v1` in AWS, the local mock server URL locally) with `OPENAI_API_KEY`.
 - **Effort tiers:** `ModelEffort` (`low | medium | high`) maps to model ids in **one** file, `core/src/ai/models.ts` (`gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra` as in bella). The transcription model is `whisper-1`.
 - **No fallback model chain** (AGENTS.md): a failed call throws, and SQS redelivery retries it.
@@ -778,6 +779,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Errors:** item errors never carry provider text. An `OpenAIError` is stored as `OpenAI request failed (openai_<status>_<code>)`, and a refusal is stored as a fixed message.
 
 **Transcribe step** (`transcribe` item; `lambda-ai` for short sources, `fargate-p3` otherwise; worker handler registry kind `transcribe`):
+
 1. **Extract audio:**
    - Run ffmpeg on the (guarded) source → mono, 16 kHz, `libmp3lame` at 32 kbps (≈14 MB/hour).
    - A source without an audio stream was already SKIPPED at fan-out.
@@ -786,7 +788,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
    - Each chunk is transcribed with `whisper-1`, `response_format=verbose_json`, `timestamp_granularities[]=segment`, plus the request's `language` hint when given.
    - **Merge:** offset each chunk's segments by the chunk start, and keep a segment only if its midpoint falls inside the chunk's own non-overlapping window `[start, nextStart)`. Every moment then belongs to exactly one chunk: there are no duplicates, and no segment is lost at a boundary.
 3. **Language:** Whisper's detected language name is mapped to a code with a fixed table (`javanese` → `jv`). An unknown name throws a typed error; it does not silently become English. A request hint is validated at intake against the table's codes (`ValidationError`). With no hint, chunk 0's detected code is the hint for the later chunks, so every chunk of one source uses the same language.
-4. **English track:** when the native language ≠ `en` and `translateToEnglish` is set (the default):
+4. **English track:** when the native language ≠ `en` and `english` is set (the default; see Step 5b):
    - The native segments are translated with `chatJson`, effort tier `TRANSLATE_EFFORT` (config), in batches of `TRANSLATE_BATCH_SEGMENTS`.
    - Schema: `{ segments: [{ index, text }] }`. The indices must exactly match the input batch, otherwise a typed error is raised and the attempt retries.
    - Start and end times are copied from the native segments, so both tracks align exactly.
@@ -800,16 +802,19 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 7. **Errors** are retried through SQS (`maxReceiveCount` 3). The DLQ consumer marks the step SKIPPED (optional AI step), so `scenes` proceeds stills-only. The item's `error` is stored.
 
 **Caption utilities** (`core/src/captions/`):
+
 - Pure `toSrt`, `toVtt`, `toText`, `parseSrt`, `parseVtt`. Index lines are positional, so a caption whose text is a number such as `2024` or `0` is preserved, which fixes partnrup's `_splitSrt` bug.
 - Timestamps use millisecond floor rounding.
 - Round-trip tests, including multi-line text, numeric-only lines, an empty text segment and hours > 99.
 
 **API:**
+
 - `GET /assets/:id/transcripts` returns `[{ language, isTranslation, segments, text, durationSec, model, urls: { srt, vtt, txt } }]`.
 - `GET /assets/:id` includes `postProcess.transcribe.status`.
 - Item callbacks for `transcribe` carry the transcript summary (languages + URLs).
 
 **Local testing:**
+
 - **Default:** `local/openaiMock.ts`, an HTTP server that implements `/audio/transcriptions` (canned `verbose_json` derived from the chunk duration, with a configurable language) and `/chat/completions` (echoes the translated text deterministically). The e2e runs the full chunk → merge → translate → store path with no network.
 - **Opt-in real API:** `npm run test:openai` runs only when `OPENAI_API_KEY` is set in the root `.env`. It uses a short speech fixture (TTS-generated when a TTS tool is available; otherwise a fixture path given in `local/config.json`) and checks native + English output and timings.
 
@@ -830,28 +835,50 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Callbacks:** item callbacks for `transcribe` carry `transcripts: [{language, isTranslation, urls}]` on the item event data.
 - **Startup validation:** the worker validates its config and `aiConfig()` at startup (`main`), and `lambdaRunner` does the same. The Lambda handler validates on each invocation, because `lambdaRunner` imports the handler before it applies the local environment.
 
-## Step 5b: multi-language translations (added 2026-10-19)
-**API shape:** `postProcess.transcribe = boolean | { language?: ISO hint for the source, translations?: string[] (extra ISO targets), english?: boolean (default true), retranscribe?: boolean }`.
+## Step 5b: multi-language translations (added and built 2026-10-19)
+
+**API shape:** `postProcess.transcribe = boolean | { language?, translations?, english?, retranscribe? }`.
+
 - **Native track:**
   - The source language is auto-detected unless `language` is given.
-  - English is added automatically when the native language ≠ `en`, unless `english: false`.
-  - `translations` are extra targets on top of that. They are deduped, the native language is dropped from the set, and every code is validated against the language table.
+  - English is added automatically when the native language is not `en`, unless `english: false`. The default is true on every request, so an additive request re-adds English unless it sends `english: false` (decision B).
+  - `english: false` does not remove an existing English track, and `retranscribe` still regenerates it (decision A).
+  - `translations` are extra targets on top of that, up to `MAX_TRANSLATIONS` (20). They are deduplicated, the native language is dropped from the set, and every code is validated against the language table. Unknown codes are a 400 that lists them all.
   - When the native language is `en`, the extras are translated from English.
 - **Translations** always come from the native segments, so the timings stay identical.
-- **Later requests are additive.** `POST /assets/:id/post-process` with only new `translations`:
+- **Later requests are additive.** `POST /assets/:id/post-process` with only `translations`:
   - reuses the stored native transcript (no audio re-transcription, no audio usage);
   - translates only the languages that are missing;
   - keeps the existing translations.
-- **`retranscribe: true`** produces a fresh native transcript and regenerates every existing translation from it, plus any new ones. Stale rows and keys are removed only in this case, or on encode/re-encode.
-- **Re-encode / encode** of a source replaces the whole transcript set with the requested one.
+- **A different `language` hint** replaces the native transcript and regenerates every existing translation from it.
+- **`retranscribe: true`** produces a fresh native transcript and regenerates every existing translation, plus any new ones.
+- **Re-encode, and post-process that cannot reuse the native** (retranscribe, a changed hint, zero or several stored natives) produce a fresh native. Every stored translation is regenerated, plus the requested ones (decision D). Stale tracks are removed afterwards.
+- **`encode` (new source)** replaces the whole transcript set with the requested one.
 - **Execution:**
   - When the native track is reused, `transcribe` items run on the AI tiers as before and skip the extract → Whisper stage.
-  - The item output and callback list every language produced or kept.
+  - The native track is stored first, then each target is stored as soon as it is translated. A redelivery after a partial store therefore translates only the missing languages (when the native is reused).
+  - Targets run in parallel, bounded by `TRANSLATE_TARGET_CONCURRENCY` (config, required; local 3, see decision C). Batches within one target stay sequential.
+  - Stale tracks are removed after all targets are stored. The output is re-read from Mongo after the stores, so it also includes tracks that concurrent additive requests stored. It is sorted with the native first, then translations by language.
+  - The item output and callback list every language present after the run.
   - `scenes` is unaffected by translate-only requests.
+- **Race rules:**
+  - `assertCurrent` runs before every store, including each translation and the stale-track removal.
+  - Before each translation store, the native transcript's `language` and `revision` are re-read. If either changed (a concurrent re-encode or retranscribe), the item throws `NativeChangedError` and SQS redelivers it. Nothing from the old native is stored.
 - **Storage:**
   - Native: `transcript/{lang}.*`; translations: `transcript/{lang}.translated.*`.
   - Unique `{assetId, language, isTranslation}`.
   - Each transcript has its own `revision` for CDN cache-busting.
+  - `findTranscripts` is scoped by `accountId` and `assetId`. It projects out segments, and only the native's segments are read, and only when a reuse needs them.
+- **Schema examples:** each example is a schema-level `example` (OpenAPI 3.0.3 has no schema `examples`). Both the transcribe options and the asset post-process request carry one.
+
+**Step 5b deviations (as built, 2026-10-19):**
+
+- **One native track per reuse.** A stored native is reused only when exactly one exists. Zero or several is treated as absent, so the audio is transcribed fresh and stale tracks are removed.
+- **Targets run in parallel, bounded.** Each target is translated and stored by its own lane (`forEachLimit`). A failing target stops the other lanes from starting new targets, and the item waits for in-flight lanes before it rejects, so no store runs after the failure is reported.
+- **Prompt names the languages.** The system prompt uses language names from the code table (`spanish to french`), not codes. The local mock echoes the target code in upper case (`FR: seg 0`).
+- **Redelivery of a fresh transcription re-transcribes.** A fresh attempt stores its native first, but a redelivered fresh attempt (encode, re-encode, retranscribe, changed hint) still re-extracts and re-transcribes the audio (D3). Only a reuse resumes from the stored native.
+- **Existing e2e cases changed.** A plain rerun now reuses the native track, so the stale-track, 429 and 500 cases use `retranscribe: true` to reach Whisper and chat. The first case now also requests `fr`, and the additive, `english: false`, English re-add and parallel cases are new.
+- **Mock call counts.** The mock counts requests per path (`requestCount`), so the e2e can assert that a reused native track makes no Whisper call. It also records the peak number of concurrent chat calls (`peakChatConcurrency`).
 
 ## Local development & testing
 
@@ -950,6 +977,26 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **Commit (step 1):** on a `feat/scaffold-core` branch, then check in before step 2.
 
 ## Implementation decisions log
+
+- **2026-10-19 (step 5b review fixes):**
+  - D (user): a re-encode keeps the asset's language set. Only `encode` replaces it. Fresh natives regenerate every stored translation plus the requested ones.
+  - A: `retranscribe` with `english: false` still regenerates an existing English track. The `english` description says so.
+  - B: the per-request `english` default is unchanged, and the description says an additive request re-adds English unless `english: false`.
+  - C: `TRANSLATE_TARGET_CONCURRENCY` is a required config value (local 3). Targets run in parallel up to it. Batches within a target stay sequential.
+  - Race rules: `assertCurrent` before every store. The reuse path re-reads the native's `language` and `revision` before each target store and throws `NativeChangedError` on a change.
+  - Each target is stored as soon as it is translated, so a redelivery translates only the missing languages.
+  - The output is re-read from Mongo after the stores and sorted native first, then by language.
+  - `findTranscripts` is scoped by `accountId` and `assetId`, and projects out segments. Only the native's segments are read, and only for a reuse.
+  - Descriptions for `language`, `translations` (up to 20, additive) and `english` document the behavior above.
+  - OpenAPI examples use the schema-level `example`, which is the only valid form in 3.0.3. The OpenAPI test asserts them.
+- **2026-10-19 (step 5b multi-language translations):**
+  - `postProcess.transcribe` is `boolean | { language?, translations?, english?, retranscribe? }`. `translateToEnglish` is removed, with no alias, since nothing is deployed.
+  - Targets come from `resolveTargets`: English is added for non-English natives unless `english` is false, the extras are added, the native is dropped, and the result is deduplicated and sorted.
+  - Intake validates every language code (hint and translations) against the core table. One `ValidationError` lists all unknown codes.
+  - A stored native is reused only for `postProcess` requests with `retranscribe` unset and no hint or a matching hint. Reuse skips extract and Whisper, so it meters no audio. It translates only the targets not yet stored, and keeps the rest.
+  - A fresh native (encode, re-encode, retranscribe, or a changed hint) translates every target and then removes stale tracks. Retranscribe also regenerates every stored translation.
+  - The item output and callback list every transcript present after the run, whether produced or kept.
+  - Post-process requests with only translations and no stored native transcribe fresh. They do not fail.
 
 - **2026-10-18 (step 5 transcription):**
   - Audio is extracted with `-vn -ac 1 -ar 16000 -c:a libmp3lame -b:a 32k`. Chunks are planned by time and stream-copied. The merge keeps a segment only if its midpoint is in `[keepFrom, keepUntil)`, so no boundary segment is duplicated or lost.

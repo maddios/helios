@@ -318,6 +318,8 @@ describe("request lifecycle against LocalStack and Mongo", () => {
 			_id: `${encoded._id}:scenes`,
 			accountId,
 			assetId: encoded._id,
+			itemId: `${encoded._id}:scenes`,
+			assetVersion: 1,
 			createdAt: new Date(),
 			promptVersion: "e2e",
 			model: "e2e",

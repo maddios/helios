@@ -5,6 +5,7 @@ import {
 	mediaAssets,
 	pipelineItems,
 	queueFor,
+	sceneAnalyses,
 	transcripts,
 	UnprocessableSourceError,
 	type ItemMessage
@@ -50,6 +51,39 @@ beforeEach(async () => {
 	({ key, accountId } = await seedAccount("acme"));
 	slug = "acme";
 });
+
+async function insertSceneAnalysis(
+	assetId: string,
+	assetVersion: number,
+	representativeStillIndex: number
+): Promise<void> {
+	await sceneAnalyses().insertOne({
+		_id: randomUUID(),
+		accountId,
+		assetId,
+		itemId: `${assetId}:scenes`,
+		assetVersion,
+		createdAt: new Date(),
+		promptVersion: "scenes-v2",
+		model: "gpt-6-sol",
+		transcriptLanguage: null,
+		summary: { title: "Title", description: "D", setting: "S", products: [], people: [], moods: [], tags: [] },
+		scenes: [
+			{
+				sceneNumber: 1,
+				startSec: 0,
+				endSec: 5,
+				reasonForTransition: "start",
+				transcriptExcerpt: null,
+				description: "d",
+				setting: "s",
+				products: [],
+				people: [],
+				representativeStillIndex
+			}
+		]
+	});
+}
 
 describe("assets", () => {
 	it("gets an asset with CDN urls for outputs and stills", async () => {
@@ -179,6 +213,41 @@ describe("assets", () => {
 				}
 			]
 		});
+	});
+
+	it("returns the latest scene analysis with its representative still resolved from the stills", async () => {
+		const asset = await seedAsset(accountId, { version: 2, outputs: STILLS });
+		await insertSceneAnalysis(asset._id, 2, 1);
+
+		const res = await request(app).get(`/assets/${asset._id}/scenes`).set("Authorization", bearer(key));
+
+		expect(res.status).toBe(200);
+		expect(res.body).toMatchObject({ promptVersion: "scenes-v2", transcriptLanguage: null });
+		expect(res.body.scenes[0]).toMatchObject({
+			sceneNumber: 1,
+			representativeStillIndex: 1,
+			representativeStill: { index: 1, timestampSec: 5, url: `${CDN_BASE}/acme/media/x/still-1.jpg?v=2` }
+		});
+	});
+
+	it("answers 409 scenes_stale when the asset changed after the analysis ran", async () => {
+		const asset = await seedAsset(accountId, { version: 3, outputs: STILLS });
+		await insertSceneAnalysis(asset._id, 2, 1);
+
+		const res = await request(app).get(`/assets/${asset._id}/scenes`).set("Authorization", bearer(key));
+
+		expect(res.status).toBe(409);
+		expect(res.body.error).toMatchObject({ code: "scenes_stale" });
+		expect(res.body.error.message).toContain("re-run post-process");
+	});
+
+	it("answers 500 when a fresh analysis references a still that does not exist", async () => {
+		const asset = await seedAsset(accountId, { version: 2, outputs: STILLS });
+		await insertSceneAnalysis(asset._id, 2, 7);
+
+		const res = await request(app).get(`/assets/${asset._id}/scenes`).set("Authorization", bearer(key));
+
+		expect(res.status).toBe(500);
 	});
 
 	it("deletes an asset with 202, tombstones it and purges its items", async () => {

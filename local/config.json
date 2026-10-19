@@ -40,6 +40,15 @@
 			"translateEffort": "low",
 			"translateBatchSegments": 40,
 			"translateTargetConcurrency": 3
+		},
+		"scenes": {
+			"effort": "medium",
+			"temperature": 0.1,
+			"maxStills": 120,
+			"windowSec": 600,
+			"snapToleranceSec": 3,
+			"imageTransport": "base64",
+			"imageConcurrency": 8
 		}
 	},
 	"analyze": {
@@ -82,6 +91,7 @@
 		"timeoutSec": 30,
 		"transcribeTimeoutSec": 120,
 		"maxAttempts": 3,
-		"maxRetryAfterSec": 30
+		"maxRetryAfterSec": 30,
+		"organization": null
 	}
 }

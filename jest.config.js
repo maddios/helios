@@ -6,6 +6,13 @@ module.exports = {
 	maxWorkers: 1,
 	clearMocks: true,
 	testTimeout: 60000,
-	roots: ["<rootDir>/contracts", "<rootDir>/core", "<rootDir>/worker", "<rootDir>/api", "<rootDir>/functions"],
+	roots: [
+		"<rootDir>/contracts",
+		"<rootDir>/core",
+		"<rootDir>/worker",
+		"<rootDir>/api",
+		"<rootDir>/functions",
+		"<rootDir>/scripts"
+	],
 	testMatch: ["**/test/**/*.test.ts"]
 };

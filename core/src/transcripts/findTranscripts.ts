@@ -14,16 +14,25 @@ export function findTranscripts({ accountId, assetId }: TranscriptScope): Promis
 		.toArray();
 }
 
-export async function findNativeSegments(
+export interface TranscriptTrackRef {
+	language: string;
+	isTranslation: boolean;
+}
+
+export async function findTrackSegments(
 	{ accountId, assetId }: TranscriptScope,
-	language: string
+	{ language, isTranslation }: TranscriptTrackRef
 ): Promise<TranscriptSegment[]> {
 	const doc = await transcripts().findOne(
-		{ accountId, assetId, language, isTranslation: false },
+		{ accountId, assetId, language, isTranslation },
 		{ projection: { segments: 1 } }
 	);
 	if (doc === null) {
-		throw new Error(`Native transcript ${language} of asset ${assetId} not found`);
+		throw new Error(`Transcript ${language} of asset ${assetId} not found`);
 	}
 	return doc.segments;
+}
+
+export function findNativeSegments(scope: TranscriptScope, language: string): Promise<TranscriptSegment[]> {
+	return findTrackSegments(scope, { language, isTranslation: false });
 }

@@ -79,6 +79,16 @@ export class S3ObjectStore implements ObjectStore {
 		);
 	}
 
+	async downloadBuffer(key: string, signal?: AbortSignal): Promise<Buffer> {
+		const response = await this.client.send(new GetObjectCommand({ Bucket: this.mediaBucket, Key: key }), {
+			abortSignal: signal
+		});
+		if (response.Body === undefined) {
+			throw new Error(`Object ${key} has no body`);
+		}
+		return Buffer.from(await response.Body.transformToByteArray());
+	}
+
 	async listKeys(prefix: string): Promise<string[]> {
 		const keys: string[] = [];
 		for await (const page of paginateListObjectsV2(

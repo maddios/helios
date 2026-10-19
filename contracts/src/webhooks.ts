@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AssetOutputViewSchema, AssetViewSchema } from "./api/assets";
 import { RequestViewSchema } from "./api/requests";
 import { TranscriptFilesSchema } from "./transcript";
+import { SceneItemOutputSchema } from "./scenes";
 import { ItemKindSchema, ItemStatusSchema } from "./statuses";
 
 export const WEBHOOK_SIGNATURE_HEADER = "Helios-Signature";
@@ -44,7 +45,8 @@ const ItemEventDataSchema = z
 			.record(z.string(), AssetOutputViewSchema)
 			.optional()
 			.describe("Outputs the item produced, keyed by profile name, with CDN URLs"),
-		transcripts: z.array(WebhookTranscriptSchema).optional().describe("Transcripts the item produced, with CDN urls")
+		transcripts: z.array(WebhookTranscriptSchema).optional().describe("Transcripts the item produced, with CDN urls"),
+		scenes: SceneItemOutputSchema.optional().describe("Scene summary the item produced")
 	})
 	.meta({ id: "WebhookItemEventData" });
 

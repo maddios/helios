@@ -51,7 +51,7 @@ async function transcribeFresh(
 	const revision = await storeTrack(ctx, nativeInput(source));
 	await translateAndStore(ctx, source, targets, { language: source.language, revision });
 	await assertCurrent(ctx);
-	await removeStaleTranscripts(ctx.slug, ctx.asset._id, [
+	await removeStaleTranscripts(ctx.account.slug, ctx.asset._id, [
 		{ language: source.language, isTranslation: false },
 		...targets.map((language) => ({ language, isTranslation: true }))
 	]);
@@ -98,7 +98,7 @@ async function translateAndStore(
 
 async function storeTrack(ctx: HandlerContext, input: TrackInput): Promise<number> {
 	await assertCurrent(ctx);
-	const { revision } = await storeTranscript({ slug: ctx.slug, asset: ctx.asset, ...input });
+	const { revision } = await storeTranscript({ slug: ctx.account.slug, asset: ctx.asset, ...input });
 	return revision;
 }
 
@@ -110,7 +110,7 @@ async function outputsOf(ctx: HandlerContext): Promise<TranscriptOutput[]> {
 			language: doc.language,
 			isTranslation: doc.isTranslation,
 			revision: doc.revision,
-			keys: transcriptKeys(ctx.slug, ctx.asset._id, doc)
+			keys: transcriptKeys(ctx.account.slug, ctx.asset._id, doc)
 		}));
 }
 

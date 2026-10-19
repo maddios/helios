@@ -95,10 +95,10 @@ export const assetRoutes = [
 		auth: "account",
 		input: { params: IdParams },
 		responses: { 200: { description: "Scene analysis", schema: AssetScenesResponseSchema } },
-		errors: [404],
+		errors: [404, 409],
 		handle: async ({ account, input }) => {
-			await findLiveAsset(account._id, input.params.id);
-			return reply.ok(toSceneAnalysisView(await latestSceneAnalysis(account._id, input.params.id)));
+			const asset = await findLiveAsset(account._id, input.params.id);
+			return reply.ok(toSceneAnalysisView(await latestSceneAnalysis(account._id, input.params.id), asset));
 		}
 	})
 ];

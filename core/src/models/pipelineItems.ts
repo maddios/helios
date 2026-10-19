@@ -3,6 +3,7 @@ import type { IndexDescription } from "mongodb";
 import {
 	ActiveStillSchema,
 	ItemKindSchema,
+	SceneItemOutputSchema,
 	ItemStatusSchema,
 	MediaAssetOutputSchema,
 	ItemQueueNameSchema,
@@ -16,7 +17,8 @@ export const PIPELINE_ITEM_TTL_SEC = 30 * 24 * 60 * 60;
 export const ItemOutputSchema = z.object({
 	assetOutputs: z.record(z.string(), MediaAssetOutputSchema).optional(),
 	activeStill: ActiveStillSchema.optional(),
-	transcripts: z.array(TranscriptOutputSchema).optional()
+	transcripts: z.array(TranscriptOutputSchema).optional(),
+	scenes: SceneItemOutputSchema.optional()
 });
 export type ItemOutput = z.infer<typeof ItemOutputSchema>;
 

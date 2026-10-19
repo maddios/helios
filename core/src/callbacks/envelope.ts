@@ -40,6 +40,7 @@ export async function itemEnvelope(
 			...(item.output?.assetOutputs !== undefined && {
 				outputs: toOutputViews(item.output.assetOutputs, request.assetVersion)
 			}),
+			...(item.output?.scenes !== undefined && { scenes: item.output.scenes }),
 			...(item.output?.transcripts !== undefined && {
 				transcripts: item.output.transcripts.map(({ language, isTranslation, revision, keys }) => ({
 					language,

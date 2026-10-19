@@ -1,10 +1,10 @@
-import type { ItemOutput, MediaAsset, PipelineItem, PipelineRequest, UsageMeter } from "@helios/core";
+import type { Account, ItemOutput, MediaAsset, PipelineItem, PipelineRequest, UsageMeter } from "@helios/core";
 
 export interface HandlerContext {
 	item: PipelineItem;
 	request: PipelineRequest;
 	asset: MediaAsset;
-	slug: string;
+	account: Account;
 	workDir: string;
 	signal: AbortSignal;
 	meter: UsageMeter;

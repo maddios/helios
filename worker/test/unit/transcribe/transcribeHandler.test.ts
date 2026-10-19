@@ -52,7 +52,7 @@ function contextWith({ mode = "postProcess", transcribe, signal }: ContextOption
 			postProcess: { transcribe, sceneDetection: false }
 		} as unknown as PipelineRequest,
 		asset: { _id: ASSET, accountId: ACCOUNT } as HandlerContext["asset"],
-		slug: "acct",
+		account: { slug: "acct" } as HandlerContext["account"],
 		workDir: "/work/item-1",
 		signal: signal ?? new AbortController().signal,
 		meter: new UsageMeter(),

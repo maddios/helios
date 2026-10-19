@@ -12,10 +12,10 @@ import {
 import { config } from "../config";
 import type { HandlerContext, HandlerResult } from "./types";
 
-export async function purgeHandler({ asset, slug, request }: HandlerContext): Promise<HandlerResult> {
+export async function purgeHandler({ asset, account, request }: HandlerContext): Promise<HandlerResult> {
 	await assertNoRunningItems(asset, config().LEASE_SEC, request._id);
 	const store = objectStore();
-	const prefixes = [assetPrefix(slug, asset._id), ingestPrefix(slug, asset._id)];
+	const prefixes = [assetPrefix(account.slug, asset._id), ingestPrefix(account.slug, asset._id)];
 	const keys = (await Promise.all(prefixes.map((prefix) => store.listKeys(prefix)))).flat();
 	if (asset.source.type === "upload") {
 		keys.push(asset.source.key);

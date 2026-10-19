@@ -12,6 +12,7 @@
 		"api/test",
 		"functions/src",
 		"functions/test",
-		"local"
+		"local",
+		"scripts"
 	]
 }

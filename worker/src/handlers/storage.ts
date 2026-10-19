@@ -65,7 +65,7 @@ async function storeFile(
 	profile: Exclude<EncodingProfile, StillsProfile>,
 	localPath: string
 ): Promise<{ output: MediaAssetOutput; bytes: number }> {
-	const key = outputKey(ctx.slug, ctx.asset._id, profile.output);
+	const key = outputKey(ctx.account.slug, ctx.asset._id, profile.output);
 	const bytes = await objectStore().uploadFile(key, localPath, contentTypeOf(localPath));
 	const probe = await probeOutput(localPath);
 	const output = compact<MediaAssetOutput>({
@@ -89,11 +89,11 @@ async function storeStills(
 	profile: StillsProfile,
 	dir: string
 ): Promise<{ output: MediaAssetOutput; bytes: number; items: StillItem[] }> {
-	const { slug, asset } = ctx;
+	const { asset, account } = ctx;
 	const names = (await readdir(dir)).sort(compareNames);
 	const timestamps = stillTimestamps(profile.params.fps, names.length);
 	const items = names.map((name, index) => ({
-		key: stillKey(slug, asset._id, profile.output, name),
+		key: stillKey(account.slug, asset._id, profile.output, name),
 		timestampSec: timestamps[index]
 	}));
 	let bytes = 0;
@@ -102,7 +102,7 @@ async function storeStills(
 	}
 	await assertCurrent(ctx);
 	await removeStaleStills(
-		slug,
+		account.slug,
 		asset._id,
 		profile.output,
 		items.map((item) => item.key)

@@ -18,7 +18,14 @@ const shared = {
 	TRANSCRIBE_OVERLAP_SEC: z.coerce.number().int().nonnegative(),
 	TRANSLATE_EFFORT: z.enum(["low", "medium", "high"]),
 	TRANSLATE_BATCH_SEGMENTS: z.coerce.number().int().positive(),
-	TRANSLATE_TARGET_CONCURRENCY: z.coerce.number().int().positive()
+	TRANSLATE_TARGET_CONCURRENCY: z.coerce.number().int().positive(),
+	SCENES_EFFORT: z.enum(["low", "medium", "high"]),
+	SCENES_TEMPERATURE: z.coerce.number().min(0).max(0.2),
+	SCENES_MAX_STILLS: z.coerce.number().int().positive(),
+	SCENES_WINDOW_SEC: z.coerce.number().int().positive(),
+	SCENES_SNAP_TOLERANCE_SEC: z.coerce.number().nonnegative(),
+	SCENES_IMAGE_TRANSPORT: z.enum(["url", "base64"]),
+	SCENES_IMAGE_CONCURRENCY: z.coerce.number().int().positive()
 };
 
 const fargateSchema = z.object({

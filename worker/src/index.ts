@@ -7,3 +7,4 @@ export * from "./handlers/registry";
 export * from "./handlers/types";
 export * from "./processItem";
 export * from "./pollLoop";
+export * from "./scenes";

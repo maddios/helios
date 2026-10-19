@@ -52,6 +52,15 @@ const schema = z.object({
 			translateEffort: z.enum(["low", "medium", "high"]),
 			translateBatchSegments: z.number().int().positive(),
 			translateTargetConcurrency: z.number().int().positive()
+		}),
+		scenes: z.object({
+			effort: z.enum(["low", "medium", "high"]),
+			temperature: z.number().min(0).max(0.2),
+			maxStills: z.number().int().positive(),
+			windowSec: z.number().int().positive(),
+			snapToleranceSec: z.number().nonnegative(),
+			imageTransport: z.enum(["url", "base64"]),
+			imageConcurrency: z.number().int().positive()
 		})
 	}),
 	openai: z.object({
@@ -64,7 +73,8 @@ const schema = z.object({
 		timeoutSec: z.number().int().positive(),
 		transcribeTimeoutSec: z.number().int().positive(),
 		maxAttempts: z.number().int().positive(),
-		maxRetryAfterSec: z.number().int().positive()
+		maxRetryAfterSec: z.number().int().positive(),
+		organization: z.string().min(1).nullable()
 	}),
 	analyze: z.object({
 		ffprobePath: z.string().min(1),
@@ -99,11 +109,12 @@ export function loadLocalConfig(): LocalConfig {
 }
 
 function openAiEnv(openai: LocalConfig["openai"], e2e: boolean): Record<string, string> {
+	const organization: Record<string, string> = openai.organization === null ? {} : { OPENAI_ORG: openai.organization };
 	if (openai.apiKeySource === "env") {
-		return { OPENAI_BASE_URL: openai.baseUrl };
+		return { OPENAI_BASE_URL: openai.baseUrl, ...organization };
 	}
 	const port = e2e ? openai.e2eMockPort : openai.mockPort;
-	return { OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENAI_API_KEY: "mock-key" };
+	return { OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENAI_API_KEY: "mock-key", ...organization };
 }
 
 export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): void {
@@ -157,6 +168,13 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		TRANSLATE_EFFORT: config.worker.transcribe.translateEffort,
 		TRANSLATE_BATCH_SEGMENTS: String(config.worker.transcribe.translateBatchSegments),
 		TRANSLATE_TARGET_CONCURRENCY: String(config.worker.transcribe.translateTargetConcurrency),
+		SCENES_EFFORT: config.worker.scenes.effort,
+		SCENES_TEMPERATURE: String(config.worker.scenes.temperature),
+		SCENES_MAX_STILLS: String(config.worker.scenes.maxStills),
+		SCENES_WINDOW_SEC: String(config.worker.scenes.windowSec),
+		SCENES_SNAP_TOLERANCE_SEC: String(config.worker.scenes.snapToleranceSec),
+		SCENES_IMAGE_TRANSPORT: config.worker.scenes.imageTransport,
+		SCENES_IMAGE_CONCURRENCY: String(config.worker.scenes.imageConcurrency),
 		...openAiEnv(config.openai, e2e),
 		API_PORT: String(config.api.port),
 		RETRY_AFTER_SEC: String(config.api.retryAfterSec),

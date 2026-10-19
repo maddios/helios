@@ -34,7 +34,7 @@
   - bella: ported from encoding-laravel.
   - novel: derived from ffprobing Cloudinary eager outputs.
 - **Transcription:** native language + English translation when the native language isn't English.
-- **People attributes in AI output:** keep partnrup's fields (gender, approximate age, ethnicity, hair, skin color, facial hair, mood), as nullable "apparent" values.
+- **People attributes in AI output:** beauty-vertical attributes for cosmetics, skincare and haircare product relevance (skin tone and undertone, hair texture and curl type, hair colour and length, facial hair, visible makeup, apparent gender presentation, approximate age range, mood), as nullable "apparent" values. Ethnicity and skin colour are not collected.
 - **LLM access:** follows bella's `helpers/gpt.ts` pattern:
   - `ModelEffort` tiers map to OpenAI models (currently `gpt-6-luna/sol/astra`), configured in one place.
   - `json_schema` strict structured outputs; no regex JSON scraping.
@@ -217,8 +217,8 @@ postProcess?: {
   scenes: [{ sceneNumber, startSec, endSec, reasonForTransition, transcriptExcerpt|null,
              description, setting, products:[{type,name}], people: Person[],
              representativeStillIndex /* best still for vid-grab / AI thumbnail */ }] }
-Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|null,
-           hairColor|null, hairType|null, hairLength|null, facialHair|null, mood|null }
+Person = { species|null, genderPresentation|null, approximateAge|null (range, e.g. "25-34"), skinTone|null (fair|light|medium|tan|deep|rich), skinUndertone|null (cool|warm|neutral|olive),
+           hairTexture|null (straight|wavy|curly|coily), curlType|null (1A to 4C, only when clearly visible), hairColor|null, hairLength|null (short|medium|long|bald), facialHair|null, visibleMakeup|null (none|natural|full|bold), mood|null }
 ```
 
 - The single call replaces partnrup's two gpt-4o calls (summary + timestamp).
@@ -229,10 +229,16 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 **Read API.**
 
 - `GET /assets/:assetId/transcripts` returns the segments, plus SRT/VTT/TXT CDN URLs per language.
-- `GET /assets/:assetId/scenes` returns the latest analysis.
+- `GET /assets/:assetId/scenes` returns the latest analysis, or 409 `scenes_stale` when it was produced for an older asset version (re-run post-process).
 - Both are included in `GET /assets/:assetId` as `postProcess: {transcribe:{status}, scenes:{status}}`.
 
 **Phase 2 hook (RAG).**
+- **Canonical embedding text per scene, built in code** from the structured fields rather than embedding raw JSON (partnrup embedded `description + json_encode(metadata)`).
+  - Example: "Scene in a bathroom: woman, 25–34, medium skin tone with warm undertone, 3B curly long dark-brown hair, natural makeup, applying leave-in conditioner; products: hair care (brand X)."
+  - The wording is consistent across videos, so similar media cluster together for cosine search.
+  - The template is versioned, so embeddings can be regenerated from stored fields whenever it changes.
+- **Hybrid search:** the Person enums (`skinTone`, `skinUndertone`, `hairTexture`, `curlType`, `visibleMakeup`, `hairLength`) plus product types are stored as filterable fields next to the vector. Atlas Vector Search pre-filters on them (with `accountId`), then ranks by similarity.
+
 
 - `scene_analyses` and `transcripts` are shaped for chunk-level embedding: scenes and fixed transcript windows, plus an asset-level summary.
 - Add `embed` items + a Mongo Atlas Vector Search index (filtered by `accountId`) and `POST /search` later. A dedicated cluster is used only if the shared one can't host it.
@@ -769,7 +775,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 
 **AI client (`core/src/ai/`)**, modelled on bella `helpers/gpt.ts`:
 
-- Uses native `fetch` against `OPENAI_BASE_URL` (required config: `https://api.openai.com/v1` in AWS, the local mock server URL locally) with `OPENAI_API_KEY`.
+- Uses native `fetch` against `OPENAI_BASE_URL` (required config: `https://api.openai.com/v1` in AWS, the local mock server URL locally) with `OPENAI_API_KEY`. `OPENAI_ORG` is optional: it is `openai.organization` in local config (nullable) and is sent as `OpenAI-Organization` when set.
 - **Effort tiers:** `ModelEffort` (`low | medium | high`) maps to model ids in **one** file, `core/src/ai/models.ts` (`gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra` as in bella). The transcription model is `whisper-1`.
 - **No fallback model chain** (AGENTS.md): a failed call throws, and SQS redelivery retries it.
 - **Retries:** an in-process retry only for 429/5xx, timeouts and network failures (`fetch failed`, `ECONNRESET`, `ETIMEDOUT`, `UND_ERR_*`), bounded by `OPENAI_MAX_ATTEMPTS` with exponential backoff. `Retry-After` (seconds or HTTP-date) is capped at `OPENAI_MAX_RETRY_AFTER_SEC`. Waits are abortable. After that, SQS redelivery takes over.
@@ -777,6 +783,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Structured output:** `chatJson({ effort, system, user, schema, schemaName, temperature, meter, signal })` sends `response_format: { type: "json_schema", strict: true }` and parses the whole body as JSON, validated with the matching zod schema. Strict mode needs every property required, so a schema with an optional field is rejected before sending (use `nullable`). No regex scraping.
 - **Usage:** the client records into a per-attempt `UsageMeter` as soon as a provider response arrives, before refusal or schema validation. `transcribeAudio` records the response duration as audio seconds. Item usage is read from the meter on success, failure and interrupt (D1 below).
 - **Errors:** item errors never carry provider text. An `OpenAIError` is stored as `OpenAI request failed (openai_<status>_<code>)`, and a refusal is stored as a fixed message.
+- **Quota:** a 429 whose error code or type is `insufficient_quota`, `credit_balance_exhausted` or `billing_hard_limit_reached` is stored as `OpenAIError` code `insufficient_quota` and is never retried, so the item fails fast instead of spending SQS retries.
 
 **Transcribe step** (`transcribe` item; `lambda-ai` for short sources, `fargate-p3` otherwise; worker handler registry kind `transcribe`):
 
@@ -879,6 +886,75 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Redelivery of a fresh transcription re-transcribes.** A fresh attempt stores its native first, but a redelivered fresh attempt (encode, re-encode, retranscribe, changed hint) still re-extracts and re-transcribes the audio (D3). Only a reuse resumes from the stored native.
 - **Existing e2e cases changed.** A plain rerun now reuses the native track, so the stale-track, 429 and 500 cases use `retranscribe: true` to reach Whisper and chat. The first case now also requests `fr`, and the additive, `english: false`, English re-add and parallel cases are new.
 - **Mock call counts.** The mock counts requests per path (`requestCount`), so the e2e can assert that a reused native track makes no Whisper call. It also records the peak number of concurrent chat calls (`peakChatConcurrency`).
+
+## Step 6 design: scene detection + prompt eval
+
+**Scenes step** (`scenes` item; `lambda-ai` for short sources, `fargate-p3` otherwise; worker handler kind `scenes`; depends on the default encode item, required, and on `transcribe`, optional):
+- **Inputs:** `outputs.stills.items` (`{key, timestampSec}`), sent as images at `detail: low`. Stills are resolved lazily: only the sampled stills of the current window are resolved, with concurrency bounded by `SCENES_IMAGE_CONCURRENCY` (required config; local 8).
+  - `SCENES_IMAGE_TRANSPORT=url|base64` (required config). Use `url` (CDN) in AWS, and `base64` locally and in the eval, because OpenAI cannot reach LocalStack.
+  - **Transcript:** the English track when one exists, otherwise the native track, as `[start-end] text` lines. `transcriptLanguage` records which.
+  - Without a transcript (`transcribe` skipped or failed), the step runs stills-only. The prompt forbids inventing speech, and `transcriptExcerpt` is null.
+- **Budget:**
+  - At most `SCENES_MAX_STILLS` stills per window, sampled evenly.
+  - Videos longer than `SCENES_WINDOW_SEC` are processed in consecutive windows. Each window after the first receives the previous window's last scene (description + setting) and returns `continuesPrevious` for its first scene.
+  - **Stitching:** only the first scene of a window after the first may merge; the code forces `continuesPrevious` to false everywhere else. When it is true, the two scenes merge: the earlier `startSec` is kept, and products and people are unioned.
+  - With more than one window, a final text-only call writes the `summary` from the scene list. Its `people` are the union of the scene people, and the call uses the no-people schema. A single window produces summary and scenes in one call.
+- **Model:** `chatJson`, effort `SCENES_EFFORT` (config; default tier **medium**, per the user), temperature `SCENES_TEMPERATURE` (0–0.2), strict `json_schema`.
+- **Output validation** (a failure raises a typed error and the item retries through SQS):
+  - `startSec` is snapped to the nearest provided still/transcript time, or to the window start, and must lie within `SCENES_SNAP_TOLERANCE_SEC`.
+  - `representativeStillIndex` must lie within its scene's `[startSec, endSec)` after coverage. An empty scenes array from any window is a `SceneOutputError`.
+  - Scenes are strictly ordered and cover `[0, duration]`: `endSec` = the next scene's `startSec`, and the last one ends at `duration`.
+  - `representativeStillIndex` must refer to a provided still. It is stored as the global index into `outputs.stills.items`, which serves vid-grab directly.
+- **Prompts:** versioned templates in `worker/src/ai/prompts/scenes/` (`scenes-v2`, edited in place in `v1.ts`).
+  - A concise system role + task; the user message carries the data.
+  - Explicit boundary criteria: a new scene on a change of location, activity or topic; runs on the same topic are merged.
+  - Times are chosen from the provided times only.
+  - People are beauty-vertical attributes: visible appearance only, for cosmetics, skincare and haircare product relevance. Every field is nullable, nothing is inferred from names or voice, and the subject limit is 10 per scene.
+  - `promptVersion` is stored.
+- **`features.peopleAttributes = false`:** the schema and prompt variant omit `people` entirely, and `people: []` is stored.
+- **Image assets:** a single image produces `summary` only (`scenes: []`).
+- **Storage:** `scene_analyses` is upserted by `(assetId, itemId)` and stores `assetVersion`, so reruns of one item don't duplicate while history across requests is kept. `GET /assets/:id/scenes` returns 409 `scenes_stale`, with a hint to re-run post-process, when `assetVersion` differs from the asset's version. Scene views add `representativeStill: { index, timestampSec, url }`.
+- **Callbacks:** the item callback carries `{ sceneCount, title }`. A `SceneInputError` (no stills) completes the item SKIPPED at once with no SQS retries; an output error still retries.
+- **Usage:** LLM tokens are metered per attempt (D1).
+
+**Prompt eval** (`npm run eval:scenes`; files under `scripts/eval/`, data under git-ignored `.cache/eval/`):
+- **Export (orchestrator only; user granted read-only prod access for this chat, about 20 rows):** `scripts/eval/exportPartnrupSamples.ts` uses `mysql2` in a `READ ONLY` transaction with SELECT statements only.
+  - It picks about 20 recent VIDEO media that have a transcript, stills and `timestamp_analysis_json`.
+  - It writes `meta.json` (duration, language), `transcript.srt`, the stills (downloaded from the existing CDN URLs), `timestamp_analysis.json` and `analysis.json`.
+  - Credentials are read at runtime from env and never written to disk or logs.
+- **Run:** the Helios scenes builder is called directly on each sample (`base64` images, real OpenAI; requires `OPENAI_API_KEY` in `.env`). `--effort low|medium|high` allows comparing tiers.
+- **Metrics:**
+  - schema validity;
+  - times drawn from provided times;
+  - coverage and ordering;
+  - scene count vs partnrup;
+  - boundary alignment (matched boundaries within ±3 s, precision and recall vs partnrup scenes);
+  - people-field coverage;
+  - tokens and latency.
+- **Report:** `.cache/eval/report.html`, a side-by-side per video (partnrup scenes vs Helios scenes, with representative stills) plus an aggregate table. Optionally, an LLM-judge score per video (`--judge`).
+
+**Running the eval (as built, 2026-10-19):**
+- **Prerequisites:** `OPENAI_API_KEY` in the root `.env` with credits (the script calls real OpenAI at `https://api.openai.com/v1`). The exported samples must be in `.cache/eval/partnrup/<mediaId>/`.
+- **Commands:** `npm run eval:scenes -- --effort low|medium|high [--limit N] [--judge]`. Each run writes `.cache/eval/results/<effort>/results.json` and `report.html`, and exits 1 when any video errored.
+- **Offline check:** `--mock` starts the local OpenAI mock in-process, so the report path runs without credits.
+- **Metric unit tests:** `npm test -- scripts/eval` (no OpenAI calls).
+
+**Step 6 deviations (as built, 2026-10-19):**
+
+- **Coverage starts at 0.** The first scene's `startSec` is forced to 0 after snapping, so the scenes cover `[0, duration]`.
+- **Zero-length merge.** A scene whose start equals the previous start, or lies at or beyond the duration, merges into the previous scene. The earlier fields are kept and products and people are unioned by value.
+- **Continuation flag in every window schema.** `continuesPrevious` is part of the scene schema for the single-window call too, where the model is told it is always false. Only a window after the first can merge.
+- **Snap candidates per window.** A start snaps to a still or transcript line start inside its own window, or to the window start, within `SCENES_SNAP_TOLERANCE_SEC`.
+- **Representative still.** It must be one of the stills sampled into its window, and it must lie within its scene after coverage. It is stored as the global index. A stale analysis answers 409 `scenes_stale`; a fresh analysis that references a missing still is a bug and answers 500.
+- **Image assets.** `analyzeImage` is a separate function, not a mode of `analyzeScenes`. It takes the `kind: image` output and stores a summary with `scenes: []`.
+- **Stored analysis.** `scene_analyses` is upserted by a unique `{assetId, itemId}` index, and `_id` is set on insert only. `assetVersion` is stored on each write. `createdAt` is rewritten on each write, so the latest read reflects the last rerun.
+- **Transcript choice.** The English translation is used when stored, otherwise the native track. The stored `transcriptLanguage` is the track's language.
+- **Base64 transport.** Stills are resolved per window through a resolver. `url` gives the CDN URL. `base64` downloads each sampled still with the handler signal and inlines it. That is for local runs and the eval only; `url` is the default in AWS. The eval passes a file-based resolver.
+- **Local drain.** `local/test/drain.ts` also polls `lambda-ai`, because short sources route scenes there.
+- **Mock.** The OpenAI mock answers `scene_*` schemas from the schema shape. Scenes start at every third still. A window after the first sets `continuesPrevious`, so stitching is exercised. `setSceneContinuation("mid-window")` sets it on the second scene of each window, which tests that the code refuses such merges.
+- **Person attributes.** Beauty-vertical attributes: skin tone and undertone, hair texture and curl type, hair colour and length, facial hair, visible makeup, apparent gender presentation, approximate age range and mood. Ethnicity and skin colour are removed. Every field is nullable.
+- **Summary people.** Windowed summaries take `people` from the union of the scene people in code. The model writes only the summary text for windowed analyses.
+- **Input errors.** Items store an error string, not a code, so a SKIPPED scene analysis (no stills) carries its message in `error`.
 
 ## Local development & testing
 
@@ -1032,6 +1108,7 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Quality: one `queueNameFromArn` (core), `@types/aws-lambda` types in functions, one optional-kinds list (`OPTIONAL_ITEM_KINDS`), the local runner uses the core logger and caches queue URLs, bootstrap takes the visibility timeout as a required argument, and every OpenAPI operation has a tag.
   - Approximate backlog counts visible plus not-visible messages (`ApproximateNumberOfMessagesNotVisible`).
   - **Step 9 checks:** set the scaler's reserved concurrency to 1. Verify on real AWS that a `lambda-p1` → `fargate-p1` redrive receives the expected `ApproximateReceiveCount` on the first Fargate receive.
+  - **Step 9 infra:** set `OPENAI_ORG` per environment when the OpenAI organization is pinned, and `SCENES_IMAGE_CONCURRENCY` for the AI tiers.
 
 - **2026-10-18 (step 3 API review, user decisions):**
   - A. Mongo unavailability answers 503 on every route with `Retry-After` (`RETRY_AFTER_SEC`, required). Approved as the deviation above.
@@ -1139,3 +1216,18 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - PLAN drift fixes: the AI DLQ outcome is SKIPPED, and `UsageSummary` carries no LLM fields.
 - **2026-10-18:** transcription uses `whisper-1` (verbose_json segments) for the native track. The English track is produced by LLM translation of the timed segments (json_schema), not the Whisper translations endpoint. There is no model fallback chain, unlike bella. Local e2e uses an OpenAI mock server, plus an opt-in real-API test.
 - **2026-10-19:** transcription supports N extra translation languages. English is automatic for non-English sources (`english: false` opts out). Later requests are additive and reuse the native track; `retranscribe` regenerates everything.
+
+- **2026-10-19:** scene detection uses effort tier medium (configurable), windowed processing with model-flagged continuation stitching, and times snapped to the provided times. The prompt eval uses a read-only partnrup prod export (user-granted for this chat), metrics, and a side-by-side HTML report.
+
+- **2026-10-19 (step 5 follow-ups):**
+  - A 429 with `insufficient_quota`, `credit_balance_exhausted` or `billing_hard_limit_reached` is never retried and fails fast (see Step 5 "Quota").
+  - `OPENAI_ORG` is wired through local config (`openai.organization`, nullable) and is sent as `OpenAI-Organization`. Step 9 infra must set it per environment when the organization is pinned.
+- **2026-10-19 (step 6 review fixes):**
+  - Person attributes are beauty-vertical (skin tone/undertone, hair texture/curl type, visible makeup); ethnicity and skin colour removed. Values are visible appearance only, nullable, and never inferred from names or voice.
+  - `continuesPrevious` is enforced in code: only the first scene of a window after the first may merge.
+  - Windowed summaries take `people` as the union of scene people; the summary call has no people schema.
+  - Stills are resolved lazily per window, with `SCENES_IMAGE_CONCURRENCY` (required; local 8). The eval uses a file-based resolver.
+  - `scene_analyses.assetVersion` drives `409 scenes_stale`. A fresh analysis that references a missing still is a 500 bug.
+  - No stills completes the scenes item SKIPPED with no SQS retries.
+  - Prompt version is `scenes-v2`, edited in place in `worker/src/ai/prompts/scenes/v1.ts`.
+- **2026-10-19 (step 6 scenes):** scene detection is built as a pure builder in `worker/src/scenes/` (`analyzeScenes`, `analyzeImage`) with versioned prompts (`scenes-v1`). Each window is one `chatJson` call on a strict schema variant, and multi-window videos get a text-only summary call. Scenes are stitched at `continuesPrevious`, and the first scene starts at 0. Times and representative stills are validated against what the model was shown. People are off by account, and the schema omits them. Deviations from the spec are listed under "Step 6 deviations".

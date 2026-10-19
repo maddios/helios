@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Usage } from "@helios/contracts";
 import {
 	accounts,
+	type Account,
 	claimItem,
 	completeItem,
 	contextLogger,
@@ -23,6 +24,7 @@ import { startHeartbeat } from "./heartbeat";
 import { handlerFor } from "./handlers/registry";
 import { AssetDeletedError, SupersededError } from "./handlers/supersession";
 import type { HandlerResult } from "./handlers/types";
+import { SceneInputError } from "./scenes/types";
 
 export type ItemOutcome = "done" | "redeliver" | "interrupted";
 
@@ -126,7 +128,7 @@ async function runClaimed(input: ProcessItemInput, claim: ClaimedItem): Promise<
 
 async function runHandler({ input, claim, signal, progress, meter }: Attempt): Promise<HandlerResult> {
 	const { item, request } = claim;
-	const { asset, slug } = await loadAssetAndSlug(item);
+	const { asset, account } = await loadAssetAndAccount(item);
 	const workDir = path.join(config().WORK_DIR, item._id);
 	await mkdir(workDir, { recursive: true });
 	try {
@@ -134,7 +136,7 @@ async function runHandler({ input, claim, signal, progress, meter }: Attempt): P
 			item,
 			request,
 			asset,
-			slug,
+			account,
 			workDir,
 			signal,
 			meter,
@@ -166,7 +168,7 @@ async function failedOutcome(attempt: Attempt, err: unknown): Promise<ItemOutcom
 		await completeItem({ itemId, status: "CANCELLED", usage });
 		return "done";
 	}
-	if (err instanceof SupersededError || err instanceof AssetDeletedError) {
+	if (err instanceof SupersededError || err instanceof AssetDeletedError || err instanceof SceneInputError) {
 		await completeItem({ itemId, status: "SKIPPED", error: err.message, usage });
 		return "done";
 	}
@@ -185,7 +187,7 @@ async function beat({ input, claim, progress, lease }: Attempt): Promise<void> {
 	}
 }
 
-async function loadAssetAndSlug(item: PipelineItem): Promise<{ asset: MediaAsset; slug: string }> {
+async function loadAssetAndAccount(item: PipelineItem): Promise<{ asset: MediaAsset; account: Account }> {
 	const asset = await mediaAssets().findOne({ _id: item.assetId, accountId: item.accountId });
 	if (asset === null) {
 		throw new Error(`Asset ${item.assetId} not found for account ${item.accountId}`);
@@ -194,7 +196,7 @@ async function loadAssetAndSlug(item: PipelineItem): Promise<{ asset: MediaAsset
 	if (account === null) {
 		throw new Error(`Account ${item.accountId} not found`);
 	}
-	return { asset, slug: account.slug };
+	return { asset, account };
 }
 
 function attemptUsage({ startedAt, meter }: Attempt, outputBytes?: number): Usage {

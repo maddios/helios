@@ -30,7 +30,7 @@ describe("translateSegments", () => {
 	beforeEach(() => {
 		process.env.TRANSLATE_BATCH_SEGMENTS = "2";
 		resetConfigForTests();
-		chatJsonMock.mockImplementation(async ({ user }) => echoTranslation(user));
+		chatJsonMock.mockImplementation(async ({ user }) => echoTranslation(user as string));
 	});
 
 	afterEach(() => {
@@ -42,7 +42,7 @@ describe("translateSegments", () => {
 		const result = await translateSegments(input());
 
 		expect(chatJsonMock).toHaveBeenCalledTimes(3);
-		expect(chatJsonMock.mock.calls.map(([call]) => JSON.parse(call.user))).toEqual([
+		expect(chatJsonMock.mock.calls.map(([call]) => JSON.parse(call.user as string))).toEqual([
 			{
 				segments: [
 					{ index: 0, text: "uno" },
@@ -82,7 +82,7 @@ describe("translateSegments", () => {
 		const reason = new Error("Worker stopping");
 		chatJsonMock.mockImplementationOnce(async ({ user }) => {
 			controller.abort(reason);
-			return echoTranslation(user);
+			return echoTranslation(user as string);
 		});
 
 		await expect(translateSegments(input(SEGMENTS, controller.signal))).rejects.toBe(reason);

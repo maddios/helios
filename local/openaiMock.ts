@@ -22,8 +22,11 @@ export interface MockFailure {
 	times: number;
 }
 
+export type SceneContinuation = "window-start" | "mid-window";
+
 export interface OpenAiMock {
 	setFailures(failures: MockFailure[]): void;
+	setSceneContinuation(mode: SceneContinuation): void;
 	requestCount(path: MockFailure["path"]): number;
 	peakChatConcurrency(): number;
 	close(): Promise<void>;
@@ -48,18 +51,24 @@ export async function startOpenAiMock({ port, language }: OpenAiMockOptions): Pr
 	let failures: MockFailure[] = [];
 	const requests = new Map<string, number>();
 	const chat: ChatStats = { inFlight: 0, peak: 0 };
+	const scenes = { continuation: "window-start" as SceneContinuation };
 	const server = http.createServer(async (req, res) => {
 		requests.set(req.url ?? "", (requests.get(req.url ?? "") ?? 0) + 1);
-		const reply = await route(req, await readBody(req), { language, failures, chat }).catch((err: unknown): Reply => ({
-			status: 500,
-			body: { error: { message: String(err) } }
-		}));
+		const reply = await route(req, await readBody(req), { language, failures, chat, scenes }).catch(
+			(err: unknown): Reply => ({
+				status: 500,
+				body: { error: { message: String(err) } }
+			})
+		);
 		res.writeHead(reply.status, { "content-type": "application/json" }).end(JSON.stringify(reply.body));
 	});
 	await new Promise<void>((resolve) => server.listen(port, "127.0.0.1", resolve));
 	return {
 		setFailures: (next) => {
 			failures = next.map((rule) => ({ ...rule }));
+		},
+		setSceneContinuation: (mode) => {
+			scenes.continuation = mode;
 		},
 		requestCount: (path) => requests.get(path) ?? 0,
 		peakChatConcurrency: () => chat.peak,
@@ -75,12 +84,13 @@ interface RouteContext {
 	language: string;
 	failures: MockFailure[];
 	chat: ChatStats;
+	scenes: { continuation: SceneContinuation };
 }
 
 async function route(
 	req: http.IncomingMessage,
 	body: Buffer,
-	{ language, failures, chat }: RouteContext
+	{ language, failures, chat, scenes }: RouteContext
 ): Promise<Reply> {
 	const forced = takeFailure(failures, req.url);
 	if (forced !== undefined) {
@@ -90,17 +100,17 @@ async function route(
 		return { status: 200, body: await transcription(body, req.headers["content-type"] ?? "", language) };
 	}
 	if (req.method === "POST" && req.url === CHAT_PATH) {
-		return { status: 200, body: await chatReply(body, chat) };
+		return { status: 200, body: await chatReply(body, chat, scenes.continuation) };
 	}
 	return { status: 404, body: { error: { message: `no mock for ${req.method} ${req.url}` } } };
 }
 
-async function chatReply(body: Buffer, chat: ChatStats) {
+async function chatReply(body: Buffer, chat: ChatStats, continuation: SceneContinuation) {
 	chat.inFlight += 1;
 	chat.peak = Math.max(chat.peak, chat.inFlight);
 	try {
 		await delay(CHAT_DELAY_MS);
-		return chatCompletion(body);
+		return chatCompletion(body, continuation);
 	} finally {
 		chat.inFlight -= 1;
 	}
@@ -153,20 +163,47 @@ function segmentsFor(duration: number) {
 }
 
 const TARGET_PATTERN = / to ([^.]+)\./;
+const STILL_PATTERN = /^Still (\d+) at ([\d.]+)s$/;
+const SCENE_STRIDE = 3;
+const PERSON = {
+	species: "human",
+	genderPresentation: null,
+	approximateAge: null,
+	skinTone: "medium",
+	skinUndertone: "warm",
+	hairTexture: null,
+	curlType: null,
+	hairColor: null,
+	hairLength: null,
+	facialHair: null,
+	visibleMakeup: null,
+	mood: null
+};
 
-function chatCompletion(body: Buffer) {
-	const request = JSON.parse(body.toString("utf8")) as { model: string; messages: { role: string; content: string }[] };
-	const system = request.messages.find((message) => message.role === "system");
+interface ChatMessage {
+	role: string;
+	content: string | { type: string; text?: string }[];
+}
+
+interface SchemaNode {
+	properties?: Record<string, SchemaNode>;
+	items?: SchemaNode;
+}
+
+interface ChatRequest {
+	model: string;
+	messages: ChatMessage[];
+	response_format?: { json_schema?: { name: string; schema: SchemaNode } };
+}
+
+function chatCompletion(body: Buffer, continuation: SceneContinuation) {
+	const request = JSON.parse(body.toString("utf8")) as ChatRequest;
 	const user = request.messages.find((message) => message.role === "user");
-	const target = TARGET_PATTERN.exec(system?.content ?? "")?.[1];
-	if (user === undefined || target === undefined) {
-		throw new Error("chat request has no user message or target language");
-	}
-	const prefix = languageCode(target).toUpperCase();
-	const { segments } = JSON.parse(user.content) as { segments: { index: number; text: string }[] };
-	const content = JSON.stringify({
-		segments: segments.map((segment) => ({ index: segment.index, text: `${prefix}: ${segment.text}` }))
-	});
+	const schema = request.response_format?.json_schema;
+	const content =
+		schema?.name.startsWith("scene_") === true
+			? JSON.stringify(sceneContent(schema.schema, user?.content ?? [], continuation))
+			: translationContent(request, user);
 	return {
 		id: "chatcmpl-mock",
 		object: "chat.completion",
@@ -174,10 +211,89 @@ function chatCompletion(body: Buffer) {
 		model: request.model,
 		choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }],
 		usage: {
-			prompt_tokens: Math.ceil(user.content.length / CHARS_PER_TOKEN),
+			prompt_tokens: Math.ceil(JSON.stringify(user?.content ?? "").length / CHARS_PER_TOKEN),
 			completion_tokens: Math.ceil(content.length / CHARS_PER_TOKEN),
-			total_tokens: Math.ceil((user.content.length + content.length) / CHARS_PER_TOKEN)
+			total_tokens: Math.ceil((JSON.stringify(user?.content ?? "").length + content.length) / CHARS_PER_TOKEN)
 		}
+	};
+}
+
+function translationContent(request: ChatRequest, user: ChatMessage | undefined): string {
+	const system = request.messages.find((message) => message.role === "system");
+	const target = TARGET_PATTERN.exec(typeof system?.content === "string" ? system.content : "")?.[1];
+	if (user === undefined || typeof user.content !== "string" || target === undefined) {
+		throw new Error("chat request has no user message or target language");
+	}
+	const prefix = languageCode(target).toUpperCase();
+	const { segments } = JSON.parse(user.content) as { segments: { index: number; text: string }[] };
+	return JSON.stringify({
+		segments: segments.map((segment) => ({ index: segment.index, text: `${prefix}: ${segment.text}` }))
+	});
+}
+
+function sceneContent(
+	schema: SchemaNode,
+	user: ChatMessage["content"],
+	continuation: SceneContinuation
+): Record<string, unknown> {
+	const properties = schema.properties ?? {};
+	const withPeople = hasPeople(properties.scenes?.items) || hasPeople(properties.summary);
+	return {
+		...("summary" in properties && { summary: summaryContent(withPeople) }),
+		...("scenes" in properties && { scenes: windowScenes(stillsIn(user), withPeople, continuation) })
+	};
+}
+
+function hasPeople(node: SchemaNode | undefined): boolean {
+	return node?.properties !== undefined && "people" in node.properties;
+}
+
+function stillsIn(user: ChatMessage["content"]): { index: number; timestampSec: number }[] {
+	if (typeof user === "string") {
+		return [];
+	}
+	return user.flatMap((part) => {
+		const match = STILL_PATTERN.exec(part.text ?? "");
+		return match === null ? [] : [{ index: Number(match[1]), timestampSec: Number(match[2]) }];
+	});
+}
+
+function windowScenes(
+	stills: { index: number; timestampSec: number }[],
+	withPeople: boolean,
+	continuation: SceneContinuation
+) {
+	return stills
+		.filter((_, position) => position % SCENE_STRIDE === 0)
+		.map((still, position) => ({
+			startSec: still.timestampSec,
+			reasonForTransition: "mock boundary",
+			transcriptExcerpt: null,
+			description: `Mock scene from still ${still.index}`,
+			setting: "mock setting",
+			products: position % 2 === 0 ? [{ type: "brand", name: "Acme" }] : [],
+			...(withPeople && { people: [PERSON] }),
+			representativeStillIndex: still.index,
+			continuesPrevious: continuesAt(position, stills, continuation)
+		}));
+}
+
+function continuesAt(position: number, stills: { index: number }[], continuation: SceneContinuation): boolean {
+	if (continuation === "mid-window") {
+		return position === 1;
+	}
+	return position === 0 && (stills[0]?.index ?? 0) > 0;
+}
+
+function summaryContent(withPeople: boolean) {
+	return {
+		title: "Mock title",
+		description: "Mock description",
+		setting: "mock setting",
+		products: [{ type: "brand", name: "Acme" }],
+		...(withPeople && { people: [PERSON] }),
+		moods: ["calm"],
+		tags: ["mock"]
 	};
 }
 

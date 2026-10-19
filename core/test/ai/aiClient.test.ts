@@ -95,6 +95,21 @@ describe("transcribeAudio", () => {
 		expect(withoutOrg.requests[0].organization).toBeUndefined();
 	});
 
+	it("does not retry a 429 caused by exhausted quota or credits", async () => {
+		const server = await useStub([
+			{
+				status: 429,
+				body: { error: { type: "insufficient_quota", code: "credit_balance_exhausted" } }
+			}
+		]);
+
+		await expect(transcribeAudio(transcribeInput())).rejects.toMatchObject({
+			status: 429,
+			code: "insufficient_quota"
+		});
+		expect(server.requests).toHaveLength(1);
+	});
+
 	it("posts a multipart verbose_json request and parses segments", async () => {
 		const server = await useStub([{ status: 200, body: transcription }]);
 
@@ -279,21 +294,6 @@ describe("chatJson", () => {
 		]);
 
 		await expect(chatJson(chatInput())).rejects.toBeInstanceOf(ModelOutputError);
-	});
-
-	it("does not retry a 429 caused by exhausted quota or credits", async () => {
-		const server = await useStub([
-			{
-				status: 429,
-				body: { error: { type: "insufficient_quota", code: "credit_balance_exhausted" } }
-			}
-		]);
-
-		await expect(transcribeAudio(transcribeInput())).rejects.toMatchObject({
-			status: 429,
-			code: "insufficient_quota"
-		});
-		expect(server.requests).toHaveLength(1);
 	});
 
 	it("retries a 429 after the Retry-After delay", async () => {

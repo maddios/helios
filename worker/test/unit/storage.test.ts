@@ -61,7 +61,7 @@ describe("storeOutputs stills", () => {
 		return {
 			asset: { _id: "asset-1", accountId: "acc-1" },
 			request: { assetVersion: 2 },
-			slug: "acme"
+			account: { slug: "acme" }
 		} as unknown as HandlerContext;
 	}
 

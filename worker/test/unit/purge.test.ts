@@ -32,7 +32,7 @@ function contextFor(): HandlerContext {
 		item: { _id: `${PURGE_REQUEST}:purge` } as PipelineItem,
 		request: { _id: PURGE_REQUEST } as HandlerContext["request"],
 		asset: ASSET as HandlerContext["asset"],
-		slug: SLUG,
+		account: { slug: SLUG } as HandlerContext["account"],
 		workDir: "/unused",
 		signal: new AbortController().signal,
 		meter: new UsageMeter(),

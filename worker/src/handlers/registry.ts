@@ -1,6 +1,7 @@
 import type { ItemKind } from "@helios/contracts";
 import { encodeHandler } from "./encode";
 import { purgeHandler } from "./purge";
+import { scenesHandler } from "./scenes";
 import { transcribeHandler } from "./transcribe";
 import type { ItemHandler } from "./types";
 
@@ -14,6 +15,7 @@ export class NoHandlerError extends Error {
 const handlers: Partial<Record<ItemKind, ItemHandler>> = {
 	encode: encodeHandler,
 	purge: purgeHandler,
+	scenes: scenesHandler,
 	transcribe: transcribeHandler
 };
 

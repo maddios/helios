@@ -19,10 +19,13 @@ const ChatChoicesSchema = z.object({
 		.min(1)
 });
 
+export type ChatContentPart =
+	{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string; detail: "low" | "high" | "auto" } };
+
 export interface ChatJsonInput<T> {
 	effort: ModelEffort;
 	system: string;
-	user: string;
+	user: string | ChatContentPart[];
 	schema: z.ZodType<T>;
 	schemaName: string;
 	temperature?: number;

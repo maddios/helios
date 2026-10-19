@@ -159,7 +159,7 @@ async function startFixtureServer(name: string): Promise<{ url: string; close: (
 
 describe("request lifecycle against LocalStack and Mongo", () => {
 	beforeAll(async () => {
-		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
+		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket], local.worker.visibilityExtensionSec);
 		await initDb(local.mongoUri);
 		await ensureIndexes();
 		await accounts().insertOne({
@@ -341,6 +341,6 @@ describe("request lifecycle against LocalStack and Mongo", () => {
 		expect(await pipelineItems().countDocuments({ assetId: encoded._id, requestId: { $ne: purge._id } })).toBe(0);
 
 		const finals = finalCallbacks(await callbacksFor(purge._id));
-		expect(finals).toEqual([{ type: "request", requestId: purge._id }]);
+		expect(finals).toEqual([{ type: "request", requestId: purge._id, sequence: expect.any(Number) }]);
 	});
 });

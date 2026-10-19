@@ -3,7 +3,8 @@ import { pipeline, type Readable } from "node:stream";
 import { assertPublicUrl, parseUrl, type ResolvedUrl, type Resolver } from "./assertPublicUrl";
 import { byteCap } from "./byteCap";
 import { ResponseTooLargeError, UnprocessableSourceError } from "./errors";
-import { pinnedGet } from "./pinnedRequest";
+import { config } from "../config";
+import { pinnedRequest } from "./pinnedRequest";
 
 export type SafeFetchOptions = { maxBytes: number; maxRedirects: number; resolve?: Resolver };
 export type SafeFetchResponse = { contentType?: string; contentLength?: number; body: Readable };
@@ -35,7 +36,7 @@ async function fetchFollowingRedirects(start: ResolvedUrl, options: SafeFetchOpt
 
 async function fetchPinned(target: ResolvedUrl): Promise<IncomingMessage> {
 	try {
-		return await pinnedGet(target);
+		return await pinnedRequest(target, { method: "GET", timeoutSec: config().INGEST_TIMEOUT_SEC });
 	} catch (err) {
 		throw new UnprocessableSourceError(`Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
 	}

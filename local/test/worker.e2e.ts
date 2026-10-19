@@ -138,7 +138,7 @@ describe("worker e2e against LocalStack and Mongo", () => {
 	const requestIds: Record<string, string> = {};
 
 	beforeAll(async () => {
-		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
+		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket], local.worker.visibilityExtensionSec);
 		await initDb(local.mongoUri);
 		await ensureIndexes();
 		await accounts().insertOne({

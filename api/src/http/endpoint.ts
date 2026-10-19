@@ -6,7 +6,7 @@ import { validate } from "../middleware/validate";
 import { sendReply, type Reply } from "./reply";
 
 export type AuthScope = "none" | "account" | "admin";
-export type HttpMethod = "get" | "post" | "patch" | "delete";
+export type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
 
 type Output<T> = T extends ZodType ? z.output<T> : undefined;
 
@@ -45,6 +45,7 @@ export interface EndpointSpec<
 	method: HttpMethod;
 	path: string;
 	summary: string;
+	tags?: string[];
 	auth: A;
 	input?: InputSpec<P, Q, B>;
 	responses: Record<number, ResponseSpec>;
@@ -68,6 +69,7 @@ type Register = (router: Router, path: string, ...handlers: RequestHandler[]) =>
 const registrars: Record<HttpMethod, Register> = {
 	get: (router, path, ...handlers) => router.get(path, ...handlers),
 	post: (router, path, ...handlers) => router.post(path, ...handlers),
+	put: (router, path, ...handlers) => router.put(path, ...handlers),
 	patch: (router, path, ...handlers) => router.patch(path, ...handlers),
 	delete: (router, path, ...handlers) => router.delete(path, ...handlers)
 };

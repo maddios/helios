@@ -26,8 +26,19 @@ const queueRedrives: Record<QueueName, Redrive> = {
 
 export const queueTopology: QueueSpec[] = [
 	...Object.entries(queueRedrives).map(([name, redrive]) => ({ name: name as QueueName, redrive })),
-	{ name: "callbacks.fifo", redrive: { target: "dlq", maxReceiveCount: 5 } }
+	{ name: "callbacks.fifo", redrive: { target: "dlq", maxReceiveCount: 6 } }
 ];
+
+export const FARGATE_QUEUE_NAMES = ["fargate-p1", "fargate-p2", "fargate-p3", "fargate-p4"] as const;
+export type FargateQueueName = (typeof FARGATE_QUEUE_NAMES)[number];
+
+export function isFargateQueue(name: string): name is FargateQueueName {
+	return (FARGATE_QUEUE_NAMES as readonly string[]).includes(name);
+}
+
+export function queueNameFromArn(arn: string): string {
+	return arn.split(":")[5];
+}
 
 export function fullQueueName(prefix: string, name: string): string {
 	return `${prefix}-${name}`;

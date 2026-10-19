@@ -2,7 +2,8 @@ import type { RequestError } from "@helios/contracts";
 import { config } from "../config";
 import { sourceObjectLocation } from "../assets";
 import { ingestUrl } from "../ingest";
-import { mediaAssets, accounts, type MediaAsset, type PipelineRequest } from "../models";
+import { accounts, mediaAssets, requests, type MediaAsset, type PipelineRequest } from "../models";
+import { contextLogger } from "../logger";
 import { failRequest, launchRequest, loadRequest } from "../pipeline";
 import { ResponseTooLargeError, UnprocessableSourceError, UnsafeUrlError } from "../ssrf";
 import { objectStore } from "../storage";
@@ -29,6 +30,10 @@ export async function analyzeRequest(requestId: string): Promise<PipelineRequest
 }
 
 export async function failAnalyze(requestId: string): Promise<void> {
+	if ((await requests().findOne({ _id: requestId })) === null) {
+		contextLogger({ requestId }).error("Analyze dead-letter request not found; acknowledged without action");
+		return;
+	}
 	await failRequest(requestId, { code: "analyze_failed", message: "Source analysis failed after retries" });
 }
 

@@ -24,8 +24,10 @@ export interface ItemMessage {
 	itemId: string;
 }
 
-export type CallbackMessage =
+export type CallbackDraft =
 	{ type: "item"; requestId: string; itemId: string } | { type: "request"; requestId: string };
+
+export type CallbackMessage = CallbackDraft & { sequence: number };
 
 export const TERMINAL_STATUSES = ["COMPLETE", "ERROR", "SKIPPED", "CANCELLED"] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];

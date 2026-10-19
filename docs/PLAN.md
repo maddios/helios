@@ -1,6 +1,7 @@
 # Helios: standalone encoding + AI post-processing service (bella first, novel fast follow)
 
 ## Context
+
 - **Why:** partnrup's player/AI/thumbnail/still tech is moving into bella. It depends on encoding-laravel + icarus (PHP) and on partnrup's cron-driven transcription and AI scene analysis.
 - **Kodak:** bella's own media service, Kodak (`/var/www/lionizeai/kodak`), transcodes through AWS Elastic Transcoder (discontinued Nov 2025).
 - **Novel:** novel's Cloudinary replacement (~$60K/yr) is the fast follow.
@@ -16,6 +17,7 @@
 - **Repo:** `/var/www/lionizeai/helios` (empty). References: `/var/www/encoding-laravel/src`, `/var/www/partnrup/src`, `/var/www/partnrup-front/src`, `/var/www/novel`, bella-backend.
 
 ## Decisions (user-confirmed)
+
 - **Architecture (gist, revised after the tech-choice review):**
   - **API:** Express on ECS via Copilot.
   - **Analysis Lambda:** ffprobe over a presigned URL → fan-out.
@@ -51,17 +53,18 @@
   - It has no "local no-op" mode.
 
 ## Presets (Mongo `encoding_presets`; editable without deploy)
+
 **Refinements (enforced by `PresetSchema`).** A profile listed as a child must be `type: "stills"` and not `isDefault`. Every default profile must be `video` or `image`.
 
 **`generic` (bella).** Port of `encoding-laravel/src/config/encoding/profiles/generic_video_profiles.php`, limited to the outputs partnrup consumes:
 
-| prio | name | output | params |
-|---|---|---|---|
-| 10 | `mp4_360` (default) | `{id}.mp4` | h360, 800k VBR, AAC 96k 44.1kHz |
-| 10→child | `stills` | `tmb/%04d.jpg` | mjpeg `fps=1/3`, source resolution |
-| 40 | `audio` | `{id}.mp3` | libmp3lame 92k 44.1kHz |
-| 100 | `mp4_720` | `{id}_720_1800.mp4` | h720, 1800k VBR, AAC 256k |
-| 110 | `mp4_1080` | `{id}_1080_2700.mp4` | h1080, 2700k VBR, AAC 256k |
+| prio     | name                | output               | params                             |
+| -------- | ------------------- | -------------------- | ---------------------------------- |
+| 10       | `mp4_360` (default) | `{id}.mp4`           | h360, 800k VBR, AAC 96k 44.1kHz    |
+| 10→child | `stills`            | `tmb/%04d.jpg`       | mjpeg `fps=1/3`, source resolution |
+| 40       | `audio`             | `{id}.mp3`           | libmp3lame 92k 44.1kHz             |
+| 100      | `mp4_720`           | `{id}_720_1800.mp4`  | h720, 1800k VBR, AAC 256k          |
+| 110      | `mp4_1080`          | `{id}_1080_2700.mp4` | h1080, 2700k VBR, AAC 256k         |
 
 - **Shared H.264 settings:** libx264 `faster`, main, `x264opts nr=500:ref=2`, `yadif`, GOP 3×fps, 30fps, `+faststart`.
 - **Smart filter:** drop a non-default profile if `targetH - 100 > sourceH`. The default is always kept, capped to source height.
@@ -70,6 +73,7 @@
 - **Preset `postProcess` defaults:** `{ transcribe: true, sceneDetection: true }`.
 
 **`novel_video` (fast follow).** The gist's table, with these verified corrections:
+
 - **Preview** = 1.25× (`e_accelerate:25`), 5 s, no audio.
 - **Full/preview chain:** blur-pad if wider than 9:16 → crop if taller → limit 720×1280 / 480×640 (`novel-api/.../migrations/20240108185640-media_transformedSources.ts`).
 - **Loading clip:** the same chain + seek 25%, 4 s.
@@ -78,14 +82,15 @@
 - **Preset `postProcess` defaults:** off.
 
 ## Compute tiers (Lambda for the primary rendition of short sources, Fargate for the rest)
+
 **Routing** is decided by the analyze Lambda from `sourceMetadata`:
 
-| Item | Short/small source (≤ `LAMBDA_MAX_DURATION_SEC` and ≤ `LAMBDA_MAX_SOURCE_BYTES`) | Long/large source |
-|---|---|---|
-| Default profile + its children (e.g. `mp4_360` + `stills`) | `lambda-p1` | `fargate-p1` |
-| `transcribe`, `scenes` | `lambda-ai` | `fargate-p3` |
-| Other renditions/profiles (`mp4_720`, `mp4_1080`, `audio` MP3, novel extras) | `fargate-p2` (always) | `fargate-p2` |
-| Re-encode / bulk | `fargate-p4` | `fargate-p4` |
+| Item                                                                         | Short/small source (≤ `LAMBDA_MAX_DURATION_SEC` and ≤ `LAMBDA_MAX_SOURCE_BYTES`) | Long/large source |
+| ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------- |
+| Default profile + its children (e.g. `mp4_360` + `stills`)                   | `lambda-p1`                                                                      | `fargate-p1`      |
+| `transcribe`, `scenes`                                                       | `lambda-ai`                                                                      | `fargate-p3`      |
+| Other renditions/profiles (`mp4_720`, `mp4_1080`, `audio` MP3, novel extras) | `fargate-p2` (always)                                                            | `fargate-p2`      |
+| Re-encode / bulk                                                             | `fargate-p4`                                                                     | `fargate-p4`      |
 
 - **`transcribe` depends on the source, not on the `audio` profile.** It derives its own mono 16 kHz low-bitrate audio with ffmpeg, so shorts get transcripts without waiting for Fargate. The MP3 profile remains a deliverable for partnrup parity.
 - **Lambda tier:**
@@ -98,18 +103,18 @@
   - A Lambda timeout or out-of-memory error therefore moves the job to Fargate automatically. Only the Fargate queues have a terminal DLQ (→ the `dlq` consumer Lambda).
 - **Fargate tier:**
   - Standalone `RunTask` workers (tag `startedBy=helios-worker`) long-poll `fargate-p1`→`p4` in order.
-  - The **scaler Lambda** (invoked async after each Fargate enqueue + every minute) starts `min(backlog, MAX_WORKERS) - running` **burst** tasks. Burst tasks self-exit after `WORKER_IDLE_TIMEOUT_SEC`.
+  - The **scaler Lambda** (invoked async after each Fargate enqueue + every minute) starts `max(0, min(backlog, MAX_WORKERS) - running)` **burst** tasks, where backlog is the visible plus in-flight messages across `fargate-p1..p4`. Burst tasks self-exit after `WORKER_IDLE_TIMEOUT_SEC`.
 - **Deploy-time options** (serverless `custom` per stage → env):
 
-| Option | Purpose | Example dev / prod |
-|---|---|---|
-| `WARM_WORKERS` | Number of always-on Fargate workers (0 = none). The scaler keeps this many **warm** tasks (tag `role=warm`, `IDLE_EXIT=false`) running; burst tasks (`role=burst`) idle-exit. | 0 / 1 |
-| `MAX_WORKERS` | Cap on Fargate tasks | 3 / 20 |
-| `WORKER_IDLE_TIMEOUT_SEC` | Burst task idle exit | 600 / 1800 |
-| `WORKER_CPU` / `WORKER_MEMORY` / `WORKER_SPOT` | Fargate task size and Spot use | 4096 / 8192 / true for p4 |
-| `LAMBDA_MAX_DURATION_SEC` / `LAMBDA_MAX_SOURCE_BYTES` | Routing thresholds | 180 / 500 MB |
-| `LAMBDA_MAX_CONCURRENCY` | Cap on concurrent Lambda encodes | 5 / 50 |
-| `ENCODE_LAMBDA_MEMORY_MB` | Encoder Lambda size | 4096 / 10240 |
+| Option                                                | Purpose                                                                                                                                                                       | Example dev / prod        |
+| ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `WARM_WORKERS`                                        | Number of always-on Fargate workers (0 = none). The scaler keeps this many **warm** tasks (tag `role=warm`, `IDLE_EXIT=false`) running; burst tasks (`role=burst`) idle-exit. | 0 / 1                     |
+| `MAX_WORKERS`                                         | Cap on Fargate tasks                                                                                                                                                          | 3 / 20                    |
+| `WORKER_IDLE_TIMEOUT_SEC`                             | Burst task idle exit                                                                                                                                                          | 600 / 1800                |
+| `WORKER_CPU` / `WORKER_MEMORY` / `WORKER_SPOT`        | Fargate task size and Spot use                                                                                                                                                | 4096 / 8192 / true for p4 |
+| `LAMBDA_MAX_DURATION_SEC` / `LAMBDA_MAX_SOURCE_BYTES` | Routing thresholds                                                                                                                                                            | 180 / 500 MB              |
+| `LAMBDA_MAX_CONCURRENCY`                              | Cap on concurrent Lambda encodes                                                                                                                                              | 5 / 50                    |
+| `ENCODE_LAMBDA_MEMORY_MB`                             | Encoder Lambda size                                                                                                                                                           | 4096 / 10240              |
 
 - **Expected latency:**
   - Shorts: first playable output in ~2–10 s after analysis.
@@ -118,6 +123,7 @@
 - **Image:** one multi-stage Dockerfile: static ffmpeg (only the needed codecs) + Node + the Lambda runtime interface client. ECR with a SOCI index to speed up Fargate pulls.
 
 ## Pipeline state & queueing (Mongo + SQS; no locks, no sweep)
+
 - **`pipeline_items`** (Mongo, TTL index on `completedAt` for cleanup, 30 days after `completedAt`): one document per profile/step. Fields: `{requestId, assetId, accountId, kind, profile, queue, priority, status (BLOCKED|QUEUED|IN_PROGRESS|COMPLETE|SKIPPED|CANCELLED|ERROR), messageId, pendingDeps: [itemIds], dependents: [itemIds], attempts, progress, error, output, usage, startedAt, completedAt, createdAt}`. Item `_id` is `${requestId}:${key}`. An item is BLOCKED iff `pendingDeps` is non-empty at creation. Each worker writes only its own document.
 - **`requests`:** `{_id, accountId, assetId, clientRequestId, mode, presetSnapshot, postProcess, assetVersion, pendingItems: [itemIds], status, callbackUrl, enqueuedAt, completedAt, createdAt}`. `_id` is always a server UUID. `clientRequestId` is the client-supplied id (exposed as `requestId` in the API) or, if none is sent, the `_id`. Unique index `{accountId, clientRequestId}` (see "Assets & requests"). `pendingItems` holds the ids of all non-SKIPPED items.
 - **Asset outputs** are a **map keyed by profile** (`outputs.mp4_720`), written with `$set` on the worker's own key, so concurrent writers never touch the same field. Mongo single-document atomicity is sufficient.
@@ -157,17 +163,21 @@
 - The Lambda entrypoint runs the same handler. If it returns an error or times out, the message isn't deleted, so SQS redelivers it and then redrives it to Fargate.
 
 ## AI post-processing (Phase 1)
+
 **Per-job control.** `POST /encode`, `/upload-and-encode` and `/re-encode/:assetId` accept:
+
 ```ts
 postProcess?: {
   transcribe?: boolean | { language?: string /* ISO hint */, translateToEnglish?: boolean /* default true */ }
   sceneDetection?: boolean
 }
 ```
+
 - Values not given fall back to the preset defaults. `sceneDetection` doesn't require transcription: without a transcript it runs on stills only.
 - Adds `POST /assets/:assetId/post-process` with the same body, to run or re-run AI steps on an existing asset without re-encoding (also useful for prompt upgrades).
 
 **Pipeline modelling.**
+
 - Post-process steps are `pipeline_items` with `kind: 'transcribe' | 'scenes'`, created `BLOCKED` with `pendingDeps`. The completion handler (see "Pipeline state & queueing") releases them.
 - They run on `lambda-ai` for short sources (redriving to Fargate on failure) and on `fargate-p3` otherwise. Same handlers, and SQS leases/retries apply.
 - Dependencies:
@@ -177,6 +187,7 @@ postProcess?: {
 - They count toward the request's `pendingItems`, so the final callback fires after AI completes. Per-item callbacks expose `transcript_ready` / `scenes_ready`.
 
 **Transcription worker step.** It fixes partnrup's bugs: the 25 MB limit, terminal errors, dropped segments, duplicate rows and hardcoded English.
+
 1. ffmpeg derives a transcription-optimized audio file from the source: mono, 16 kHz, low-bitrate. If it is still over the provider limit, split it into chunks with a small overlap, transcribe each, then offset and merge the segments.
 2. Call the OpenAI audio transcription API with segment-level timestamps. The model is set in `config/ai.ts`; it must support timestamped segments (`whisper-1` verbose_json is the known-good baseline).
 3. If the detected language ≠ English and translation is enabled, produce an English track via the translation endpoint.
@@ -184,6 +195,7 @@ postProcess?: {
 5. Errors are retried via SQS redelivery (`maxReceiveCount` 3). The DLQ consumer marks the step ERROR and lets `scenes` proceed stills-only. The error message is stored on the item.
 
 **Scene detection worker step.** It replaces `Vision.php` + `SearchMediaProcessingCron::fetchTimestampMetadata`/`fetchContentMetadata`, as one structured call per video.
+
 - **Input:**
   - Stills, each labelled with its exact `timestampSec` from the stills output metadata (not a hardcoded interval).
   - Transcript segments as `[start-end] text`, plus duration.
@@ -198,6 +210,7 @@ postProcess?: {
   - Temperature low (0–0.2) for the scene step.
   - Prompt text lives in `worker/ai/prompts/` as versioned templates. `promptVersion` is stored with the results.
 - **Output (strict `json_schema`)** → Mongo `scene_analyses`:
+
 ```ts
 { assetId, accountId, promptVersion, model, transcriptLanguage|null,
   summary: { title, description, setting, products:[{type,name}], people: Person[], moods:[], tags:[] },
@@ -207,44 +220,49 @@ postProcess?: {
 Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|null,
            hairColor|null, hairType|null, hairLength|null, facialHair|null, mood|null }
 ```
-  - The single call replaces partnrup's two gpt-4o calls (summary + timestamp).
-  - `representativeStillIndex` serves partnrup's vid-grab mapping (`mediaVidGrab.vue:41-66`) directly, with no "first still ≥ scene time" heuristic.
-  - When the account's `features.peopleAttributes` is off, the schema and prompt omit the `people` attribute fields (see "Privacy & deletion").
+
+- The single call replaces partnrup's two gpt-4o calls (summary + timestamp).
+- `representativeStillIndex` serves partnrup's vid-grab mapping (`mediaVidGrab.vue:41-66`) directly, with no "first still ≥ scene time" heuristic.
+- When the account's `features.peopleAttributes` is off, the schema and prompt omit the `people` attribute fields (see "Privacy & deletion").
 - **Image assets:** the same step with a single image produces `summary` only.
 
 **Read API.**
+
 - `GET /assets/:assetId/transcripts` returns the segments, plus SRT/VTT/TXT CDN URLs per language.
 - `GET /assets/:assetId/scenes` returns the latest analysis.
 - Both are included in `GET /assets/:assetId` as `postProcess: {transcribe:{status}, scenes:{status}}`.
 
 **Phase 2 hook (RAG).**
+
 - `scene_analyses` and `transcripts` are shaped for chunk-level embedding: scenes and fixed transcript windows, plus an asset-level summary.
 - Add `embed` items + a Mongo Atlas Vector Search index (filtered by `accountId`) and `POST /search` later. A dedicated cluster is used only if the shared one can't host it.
 
 ## Assets & requests
+
 - **Active still / poster (addition 1, a parity fix for encoding-laravel `Thread.php:595-630`):**
   - `media_assets.activeStill = {index, timestampSec, selectedByUser}`.
   - Default is still 0.
   - On re-encode, a still the user selected maps to the new still with the nearest `timestampSec`.
   - `PATCH /assets/:id/active-still`.
-  - *Build step:* model now; handled by the worker in step 2; route in step 3.
+  - _Build step:_ model now; handled by the worker in step 2; route in step 3.
 - **Preset snapshot (addition 2):**
   - Fan-out stores the resolved profiles + `postProcess` defaults on the asset (`presetSnapshot`, `presetVersion`) and on the request.
   - Re-encode uses the asset's snapshot by default. `refreshPreset: true` takes the current preset instead; there is no old/new merge, unlike encoding-laravel.
-  - *Build step:* now.
+  - _Build step:_ now.
 - **Idempotency through a client-supplied request id (addition 3):**
   - The request id itself is the idempotency key. Callers may send their own `requestId` (a UUID), stored as `clientRequestId` and unique per account.
   - A repeat returns the existing request. A repeat with a different asset or mode is rejected. With no `requestId` given, the server generates one.
   - `requests.assetVersion` is the asset version the request leaves behind: `version + 1` for re-encode, otherwise the current version. The asset update applies it with `$max`, so a fan-out resumed after a crash bumps the version exactly once.
   - A server-generated id alone can't dedupe, because a client whose POST timed out never received it.
-  - *Build step:* model/fan-out now; route in step 3.
+  - _Build step:_ model/fan-out now; route in step 3.
 - **Usage metering for dashboard stats (addition 5):**
   - Items record `usage: {computeTier, computeSec, outputBytes, audioSec, llmInputTokens, llmOutputTokens, model}`.
   - `job_reports` rolls these up per request.
   - `GET /usage?from&to&groupBy` serves the console.
-  - *Build step:* schema now; filled in by the workers.
+  - _Build step:_ schema now; filled in by the workers.
 
 ## Cost units (stored once per request)
+
 - Helios stores resource units, never dollars or a currency. Dollar prices are derived outside Helios from these units, so price changes never require a data migration.
 - `computeResourceUnits(usages)` is pure. It produces `ResourceUnits` (contracts): `lambdaGbSeconds` (Σ computeSec × memoryMb/1024), `fargateVcpuSeconds`, `fargateGbSeconds`, `fargateSpotVcpuSeconds`, `fargateSpotGbSeconds` (on-demand split from spot by the `spot` flag), `outputGb` (Σ outputBytes / 1024³), `transcriptionAudioSeconds`, and `llmTokens` per model. Every field is a real sum, starting from 0.
 - Each usage entry carries what is needed to derive units: `memoryMb` (required), `vcpu` and `spot` (required for fargate). The worker fills them from `WORKER_MEMORY_MB`, `WORKER_VCPU` and `WORKER_SPOT`, which are required with no defaults.
@@ -254,30 +272,33 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 - **Display dimensions:** `SourceMetadata.width`/`height` are the display dimensions, after rotation is applied by analyze. The worker applies EXIF orientation (`sharp.rotate()`) to every image output, so stored sizes match what viewers see.
 
 ## API notes
-- **OpenAPI (addition 7):** generated from the zod schemas (`@asteasolutions/zod-to-openapi`) and served at `/docs`. The SDK types come from the same schemas. *Build step:* 3 + 8.
+
+- **OpenAPI (addition 7):** generated from the zod schemas (`@asteasolutions/zod-to-openapi`) and served at `/docs`. The SDK types come from the same schemas. _Build step:_ 3 + 8.
 - **Callback delivery log + redeliver (addition 8):**
   - A `callback_deliveries` collection, `GET /requests/:id/callbacks` and `POST /requests/:id/callbacks/redeliver`.
-  - *Build step:* 3 + 4.
-- **`dryRun` (addition 12):** `POST /encode?dryRun=true` returns the `planItems` output (items, queues, deps) and writes nothing. *Build step:* 3.
+  - _Build step:_ 3 + 4.
+- **`dryRun` (addition 12):** `POST /encode?dryRun=true` returns the `planItems` output (items, queues, deps) and writes nothing. _Build step:_ 3.
 - **Other routes added by the additions:**
-  - `DELETE /requests/:id` (cancel, addition 4), *build step:* 3.
-  - `PATCH /assets/:id/active-still` (addition 1), *build step:* 3.
-  - `GET /usage` (addition 5), *build step:* 3.
-  - `DELETE /assets/:id` (purge, addition 11), *build step:* 3.
+  - `DELETE /requests/:id` (cancel, addition 4), _build step:_ 3.
+  - `PATCH /assets/:id/active-still` (addition 1), _build step:_ 3.
+  - `GET /usage` (addition 5), _build step:_ 3.
+  - `DELETE /assets/:id` (purge, addition 11), _build step:_ 3.
 - **Preset routes:** see "Preset management API".
 
 ## Observability
+
 - **Logs and tracing (addition 9):**
   - pino JSON logs with `accountId`/`requestId`/`itemId`/`assetId`, propagated as SQS message attributes through API → Lambda → worker.
   - Workers log ffmpeg progress into `pipeline_items.progress`, and the last 50 ffmpeg stderr lines into `error` on failure. This matches the per-thread visibility encoding-laravel had.
   - dd-trace is optional (bella uses Datadog).
-  - *Build step:* the logger in core now; used throughout.
+  - _Build step:_ the logger in core now; used throughout.
 - **Alarms + Slack (addition 10):**
   - CloudWatch alarms on DLQ depth, `ApproximateAgeOfOldestMessage` per tier, the Lambda→Fargate redrive rate, and the error rate.
   - They go to an SNS topic, then Slack through AWS Chatbot (no code), with a channel configured per stage.
-  - *Build step:* 9.
+  - _Build step:_ 9.
 
 ## Privacy & deletion
+
 - **Right to be forgotten (addition 11):**
   - An account-level `features.peopleAttributes` toggle. When it's off, the schema and prompt omit the people attribute fields.
   - `DELETE /assets/:id` returns 202 and runs a `purge` item:
@@ -289,9 +310,10 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
     - tombstones the asset;
     - sends an `asset.deleted` callback.
   - Kodak-owned source objects remain the caller's responsibility.
-  - *Build step:* the toggle now; purge in steps 2–4.
+  - _Build step:_ the toggle now; purge in steps 2–4.
 
 ## Corrections to the gist (applied)
+
 1. **Priority:** set by queue tier (p1→p4) rather than a sort key. Every video's default rendition is processed before secondary profiles.
 2. **Leases:** a Mongo heartbeat lease (`leaseId`, `heartbeatAt`, `LEASE_SEC`). SQS visibility is at least the lease and is extended by the heartbeat. Redelivery handles worker crashes, so no sweep job is needed. On SIGTERM, the lease is released and the message is requeued.
 3. **Finalize:** the request's `pendingItems` id set in Mongo; the caller that empties it finalizes. Error outcomes (via the DLQ consumer) also produce callbacks; encoding-laravel never sends them.
@@ -317,6 +339,7 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 14. **Compute:** 30 GB ephemeral storage; Fargate Spot capacity provider for bulk.
 
 ## Repo layout (`/var/www/lionizeai/helios`; Node 22, TS, jest + mongodb-memory-server, prettier from bella)
+
 - `contracts/`:
   - zod schemas and inferred types shared with clients: encode/upload requests, `postProcess`, preset/profile, asset, outputs, transcript, scenes, callback payloads, errors and statuses.
   - The OpenAPI registry.
@@ -347,6 +370,7 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
 - `scripts/`: seed-account, seed-presets, sample-cloudinary-outputs, cloudinary-download (Phase 3).
 
 ## Modularity rules (apply to every step)
+
 - **Workspace packages with one direction of dependency:**
 
   ```
@@ -357,48 +381,54 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
     - encode/upload requests, `postProcess`, preset/profile, asset, outputs, transcript, scenes, callback payloads, errors and statuses;
     - the OpenAPI registry.
   - The SDK never depends on `core` (Mongo/AWS).
+
 - **Feature modules.** `core/src/<module>/` (`assets`, `presets`, `pipeline`, `queue`, `storage`, `cdn`, `callbacks`, `ai`, `usage`) each exposes only its `index.ts`. A dependency-cruiser rule in `npm run lint` forbids deep imports and import cycles.
 - **AWS behind small adapters.** `Queue`, `ObjectStore` and `Cdn` interfaces with SQS/S3/CloudFront implementations. Logic depends on the interfaces, so tests mock at the boundary.
 - **Step handlers.** A `kind → handler` registry in the worker: a new step kind is one new file plus a registry entry, and there are no switch chains.
 - **Small files and functions.** Each file has one responsibility, with no god-services.
 
 ## Preset management API (new; build step 3, SDK step 8)
+
 - **Routes:** `GET/POST /presets`, `GET/PATCH/DELETE /presets/:name`, and `PATCH /presets/:name/profiles/:profile`. Presets are scoped per account; system presets like `generic` can be read and cloned but not edited.
 - **Versioning:** each edit bumps `version` (the profile's `version` too). Existing assets keep their snapshot until a re-encode with `refreshPreset: true` (addition 2).
 - **Validation:** profile params are validated by `contracts` schemas, e.g. codec/height/bitrate ranges and that `children` exist. Validation errors are returned as typed errors.
 - **Dry run:** `POST /presets/:name/dry-run` takes a `sourceMetadata`, or an existing `assetId`, and returns the planned items. It reuses `planItems`.
 
 ## SDK design (`@partnrup/helios-sdk`; build step 8, typed from `contracts`)
+
 **Simple path, a few lines per task:**
+
 ```ts
 const helios = new Helios({ apiKey });
 const { asset, request } = await helios.uploads.uploadAndEncode(file, { preset: "generic", onProgress });
-await helios.requests.wait(request.id);                           // polling helper with backoff
-const event = helios.webhooks.verify(rawBody, signatureHeader);   // typed discriminated union
+await helios.requests.wait(request.id); // polling helper with backoff
+const event = helios.webhooks.verify(rawBody, signatureHeader); // typed discriminated union
 ```
 
 **Advanced, through resource namespaces:**
 
-| Namespace | Methods |
-|---|---|
-| `uploads` | Manual multipart: `create`/`signParts`/`complete`/`abort`. `uploadAndEncode` handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
-| `encodes` | `create` (`dryRun`, `requestId` idempotency, `postProcess`), `reencode` (`refreshPreset`) |
-| `requests` | `get`, `cancel`, `wait`, `callbacks.list`/`redeliver` |
-| `assets` | `get`, `delete` (purge), `setActiveStill`, `postProcess` |
-| `transcripts` | `list` |
-| `scenes` | `get` |
-| `presets` | CRUD, `updateProfile`, `clone`, `dryRun` |
-| `files` | |
-| `images` | `url(key, { w, h, q, f, pad, bg })`: a pure URL builder |
-| `usage` | `get` |
+| Namespace     | Methods                                                                                                                                                    |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `uploads`     | Manual multipart: `create`/`signParts`/`complete`/`abort`. `uploadAndEncode` handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
+| `encodes`     | `create` (`dryRun`, `requestId` idempotency, `postProcess`), `reencode` (`refreshPreset`)                                                                  |
+| `requests`    | `get`, `cancel`, `wait`, `callbacks.list`/`redeliver`                                                                                                      |
+| `assets`      | `get`, `delete` (purge), `setActiveStill`, `postProcess`                                                                                                   |
+| `transcripts` | `list`                                                                                                                                                     |
+| `scenes`      | `get`                                                                                                                                                      |
+| `presets`     | CRUD, `updateProfile`, `clone`, `dryRun`                                                                                                                   |
+| `files`       |                                                                                                                                                            |
+| `images`      | `url(key, { w, h, q, f, pad, bg })`: a pure URL builder                                                                                                    |
+| `usage`       | `get`                                                                                                                                                      |
 
 **Implementation rules:**
+
 - **Publishing happens only through GitHub Actions**, in the deploy workflow, using the `NPM_AUTH_TOKEN` repo secret. Nothing is published from a local machine.
 - Built on native `fetch`, with no AWS SDK.
 - Typed `HeliosError` subclasses with `code`, `status` and `requestId`.
 - Automatic retries on 429/5xx, with the idempotency key reused across them.
 
 **Self-documenting, for both humans and agents:**
+
 - **TSDoc on every public method, type and field**, with `@example`, `@throws` and default values. The types come straight from the zod schemas, so editors and agents see the exact shapes.
 - **The package ships these docs:**
   - `README.md`: quickstart + one recipe per task.
@@ -408,6 +438,7 @@ const event = helios.webhooks.verify(rawBody, signatureHeader);   // typed discr
 - **API docs:** OpenAPI generated from the same `contracts` and served at `/docs` on the API (addition 7).
 
 ## Phases
+
 - **1 (Helios + bella preset + AI):**
   1. Scaffold + contracts + core models + fan-out/deps (preset snapshot, idempotent `requestId`, fair-queue `groupId`, logger).
      - Scaffold: root `package.json` (workspaces `contracts`, `core`), `tsconfig.base.json`, prettier, jest, `.gitignore`, `.nvmrc`, `docker-compose.yml` (`standalone` profile), `local/config.json` + loader, queue topology, `local:bootstrap`, step-1 e2e (`test:local`).
@@ -455,6 +486,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 ## Step 2 design: worker + completion handler
 
 **ffmpeg parity with encoding-laravel.** Commands were reconstructed from `vendor/expo/ffmpeg-sdk` + `Encoding/Thread.php`. The intentional differences are marked ★.
+
 - **Input:** `-y -nostdin -reconnect_on_http_error 503,500 -reconnect_streamed 1 -reconnect_delay_max 2 -reconnect_on_network_error 1 -i <presigned URL>`, plus ★`-progress pipe:1 -nostats` for progress reporting.
 - **MP4 (`video` profiles):**
   - Filters: `-vf "yadif=0:-1:0,scale=-2:H"`, where ★`H = min(targetHeight, sourceHeight)` (never upscale; encoding-laravel upscaled a 640p source to 720).
@@ -471,6 +503,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Image sources:** `image` and `image_still` go through `sharp`, not ffmpeg: a full JPG at the profile quality, plus one still at source resolution.
 
 **Worker (`worker/` package, `@helios/worker`).**
+
 - **`ffmpeg/`:** pure arg builders per profile type (golden-tested against the commands above), a runner (spawn, progress parser, last 50 stderr lines kept for errors), and an ffprobe of each output to fill `MediaAssetOutput`.
 - **`handlers/`:** a registry keyed by item kind (`encode` → `encodeHandler`). `encodeHandler` dispatches per profile type to `video/` or `image/`, both of which build local paths with the shared `localOutputPath`, and it composes the parent + children outputs. `transcribe` and `scenes` handlers arrive in steps 5–6; until then those items fail into the DLQ path.
 - **`processItem(itemId, messageId)`:**
@@ -497,6 +530,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **`Dockerfile`:** `node:22-bookworm-slim` + pinned static ffmpeg/ffprobe (`mwader/static-ffmpeg`). The runtime stage installs only `sharp`, the one package the bundle externalizes, at its lockfile version. The Lambda RIC is added in step 4.
 
 **Core additions.**
+
 - **Config:** `MEDIA_BUCKET`, plus optional `S3_ENDPOINT` (LocalStack, path-style).
 - **`storage/`:** an `ObjectStore` interface + S3 implementation: presign get, upload file, list prefix, delete keys.
 - **`assets/`:** key builders (`{slug}/media/{assetId}/…`, `{id}` = assetId), plus `pickActiveStill`:
@@ -520,6 +554,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Purge:** deferred to step 3 together with its route; the CDN invalidation comes in step 7.
 
 **Tests.**
+
 - **Unit:** golden ffmpeg args per profile, including a capped default and a no-audio video; the progress parser; `pickActiveStill`; claim/complete idempotency (rerun after a crash at each step: no double release, no double finalize, nothing lost).
 - **`npm run test:golden`:** runs inside the worker Docker image on generated fixtures. It checks output heights, bitrates within tolerance, faststart (`moov` before `mdat`), still count ≈ duration/3 with timestamps, MP3 params, and image + `image_still`.
 - **`npm run local:fixtures`:** generates the fixtures with ffmpeg into `.cache/fixtures` (16:9 1080p, 9:16 720p, 300p, no-audio, image).
@@ -532,6 +567,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 ## Step 3 design: API, auth, admin, request lifecycle
 
 **Request lifecycle (split fan-out).**
+
 - **`createRequest`:** persists the asset (with `sourceMetadata` absent until analyzed) and the request, with status **`ANALYZING`**, `presetSnapshot`, resolved `postProcess`, `mode` and `clientRequestId`. It is idempotent per `(accountId, clientRequestId)`, as before.
 - **`launchRequest`:** what fan-out used to do after the insert. It plans, sets `pendingItems`, inserts items, updates the asset, enqueues, sets `enqueuedAt`, and moves the status to `IN_PROGRESS`.
 - **`analyzeRequest(requestId)`:** ingests a URL source if needed, ffprobes the source over a presigned URL, stores `sourceMetadata` with display dims (rotation applied), then calls `launchRequest`.
@@ -547,6 +583,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
   - `IN_PROGRESS` without `enqueuedAt` → `launchRequest`.
 
 **Sources** (`source` is one of the following):
+
 - `{ bucket, key }`: the bucket must be in the account's `sourceBuckets` allowlist.
 - `{ uploadKey }`: a Helios upload under `{slug}/uploads/…`.
 - `{ url }`, the new URL ingest. It is copied into `{slug}/sources/{assetId}/original` by the analyze step:
@@ -558,6 +595,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
   The same SSRF guard validates `callbackUrl` at the API and again at delivery (step 4).
 
 **Auth.**
+
 - `Authorization: Bearer <key>`.
 - **Account keys** are `sk_live_` + 32 random bytes in base62. They are stored as SHA-256 with a unique index, and only a 12-char prefix is kept for display. `lastUsedAt` updates are throttled to once a minute.
 - **Admin keys** are `sk_admin_…` in the same collection with `scope: "admin"` and no `accountId`.
@@ -566,19 +604,20 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 
 **Account API** (account keys). Request and response schemas live in `contracts` and generate OpenAPI at `/docs` + `/openapi.json`.
 
-| Area | Routes |
-|---|---|
-| Encoding | `POST /encode` (`?dryRun=true` with an S3 or upload source probes without writing, or the body supplies `sourceMetadata`), `POST /assets/:id/re-encode` (`refreshPreset`), `POST /assets/:id/post-process` |
-| Uploads | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode, status rules below), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
-| Assets | `GET /assets` (by `externalId`, cursor), `GET /assets/:id` (outputs with CDN URLs `CDN_BASE_URL/{key}?v={version}`, `postProcess` status, `activeStill`), `PATCH /assets/:id/active-still`, `DELETE /assets/:id` (202, purge), `GET /assets/:id/transcripts`, `GET /assets/:id/scenes` |
-| Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel; 409 for purge requests), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` (429 `redeliver_cooldown` inside `REDELIVER_COOLDOWN_SEC`) |
-| Presets | per "Preset management API" (account presets; system presets are read and clone only) |
-| Usage | `GET /usage?from&to` (reads `usage_daily`; `from <= to`, span at most 366 days) |
-| Health | `GET /health` (process liveness only, no auth, no database); `GET /ready` (pings Mongo, no auth, for monitoring) |
+| Area     | Routes                                                                                                                                                                                                                                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Encoding | `POST /encode` (`?dryRun=true` with an S3 or upload source probes without writing, or the body supplies `sourceMetadata`), `POST /assets/:id/re-encode` (`refreshPreset`), `POST /assets/:id/post-process`                                                                                                 |
+| Uploads  | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode, status rules below), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
+| Assets   | `GET /assets` (by `externalId`, cursor), `GET /assets/:id` (outputs with CDN URLs `CDN_BASE_URL/{key}?v={version}`, `postProcess` status, `activeStill`), `PATCH /assets/:id/active-still`, `DELETE /assets/:id` (202, purge), `GET /assets/:id/transcripts`, `GET /assets/:id/scenes`                     |
+| Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel; 409 for purge requests), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` (429 `redeliver_cooldown` inside `REDELIVER_COOLDOWN_SEC`)                                                                        |
+| Presets  | per "Preset management API" (account presets; system presets are read and clone only)                                                                                                                                                                                                                      |
+| Usage    | `GET /usage?from&to` (reads `usage_daily`; `from <= to`, span at most 366 days)                                                                                                                                                                                                                            |
+| Health   | `GET /health` (process liveness only, no auth, no database); `GET /ready` (pings Mongo, no auth, for monitoring)                                                                                                                                                                                           |
 
 `GET /openapi.json` and `GET /docs` require any valid account or admin key. Every route answers 503 `service_unavailable` with `Retry-After` (`RETRY_AFTER_SEC`) when Mongo is unavailable.
 
 **Admin API** (admin keys):
+
 - `POST/GET/PATCH /admin/accounts` (slug, name, `sourceBuckets`, `callbackUrl`, `features`);
 - `POST /admin/accounts/:id/keys` (the plaintext key is returned once) and `DELETE /admin/accounts/:id/keys/:keyId` (revoke);
 - `POST /admin/accounts/:id/webhook-secret/rotate` (`whsec_…`, returned once);
@@ -586,11 +625,13 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - `GET /admin/usage`.
 
 **Cancel:**
+
 1. Set the request to `CANCELLED`.
 2. Settle every BLOCKED/QUEUED item as CANCELLED through `completeItem`. IN_PROGRESS items abort on their next heartbeat and settle CANCELLED themselves.
 3. Write the job report (status CANCELLED) and send the final callback right away. Later settles don't finalize again, because finalize only acts on IN_PROGRESS requests.
 
 **Purge (`DELETE /assets/:id`):**
+
 1. Tombstone the asset (`deletedAt`). Reads return 404 from then on.
 2. Cancel in-flight requests.
 3. Enqueue a `purge` item on `fargate-p2`. The purge handler throws (retry) while another item of the asset holds a fresh lease. Otherwise it deletes every S3 object under the asset prefix and its ingest copy (`{slug}/sources/{id}/`), plus the upload it owns (the partial unique index on `source.key` means no other asset references it). It then scrubs the asset record (`$unset` outputs, activeStill, externalId, `sourceMetadata.probe`, `source.url`) and the `callback_deliveries` payloads for the asset's requests, deletes transcripts, scene_analyses and pipeline items (except the purge item), and sends the `asset.deleted` callback from the purge request's final callback. `requests`, `job_reports` and `usage_daily` are kept (decision A). The CDN invalidation is added in step 7.
@@ -599,12 +640,14 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 **Errors.** A single `HeliosError` hierarchy in `contracts` (`code`, HTTP status, message, details) maps to the JSON body `{ error: { code, message, details, requestId } }`. zod validation failures return 400 `validation_failed`.
 
 **Packages.**
+
 - **`api/`:** Express 5. Thin routers per resource, with logic in core modules (`accounts`, `apiKeys`, `presets`, `requests`, `assets`, `uploads`, `usage`, `callbacks`). Middleware handles auth, validation, error mapping, request logging and correlation ids.
 - **Seeds:** `npm run seed:presets` upserts the `generic` system preset.
 - **Local:** `npm run local:api`, plus a compose service `helios-api` (host network), and an e2e that drives the full HTTP flow. That flow is: admin creates account + key → upload → encode (sync and async) → drain the queues → GET asset → cancel → purge.
 - The Copilot manifest is deferred to step 9.
 
 **Step 3 deviations (as built):**
+
 - Mongo network and server-selection errors map to 503 `service_unavailable` on every route, not only write paths, with `Retry-After` (`RETRY_AFTER_SEC`). Approved by the user on 2026-10-18.
 - `RequestView.postProcess` is optional and absent for purge requests. `AssetView.sourceMetadata` omits the raw `probe`.
 - `POST /uploads/multipart/{uploadId}/complete` without `encode` returns 200 `{ uploadKey }`. With `encode` it returns `{ uploadKey, request }` and follows the `/encode` status rules: **201** sync, **202** async, **200** repeated `requestId`, and **422** with the sync failure codes (`details: { requestId, assetId }`). Approved by the user on 2026-10-18.
@@ -617,10 +660,117 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - Usage ranges are capped at 366 days; the range check runs on both `/usage` routes.
 - The OpenAPI document is emitted as 3.0.3 (`OpenApiGeneratorV3`), so the Jest validator (`@readme/openapi-parser`) can load in CommonJS.
 
+## Step 4 design: Lambdas
+
+**`functions/` package (`@helios/functions`).** Thin SQS and schedule handlers over core. Every handler processes one record (`batchSize 1`) and returns `batchItemFailures` on error, so only that message is retried.
+
+- **`analyze`:** `analyze` queue → `analyzeRequest(requestId)`.
+- **`dlq`:** one handler for every terminal DLQ:
+  - **`fargate-p*-dlq`:** `completeItem` with ERROR (using the item's stored `error`). Optional AI steps (`transcribe`, `scenes`) get SKIPPED instead.
+  - **`analyze-dlq`:** `failAnalyze`.
+  - **`callbacks-dlq`:** mark the delivery `failed`.
+  - The handler is idempotent, because `completeItem` and `failRequest` already are.
+- **`callback`:** `callbacks.fifo` → build the payload from stored state, then POST it to the request's `callbackUrl`, or the account's if the request has none.
+  - **Delivery:** SSRF-guarded and pinned, with a timeout of `CALLBACK_TIMEOUT_SEC`. Every attempt is recorded in `callback_deliveries`.
+  - **Retries:** a non-2xx response or a network error throws, after setting the message visibility to a backoff of 30 s → 2 m → 10 m → 30 m → 2 h. With `maxReceiveCount` 6 the message then goes to `callbacks-dlq`.
+  - **Ordering:** FIFO per request, so the item events of one request arrive in order before its final event.
+  - No callback URL → the delivery is recorded as `skipped`.
+- **`scaler`:** async-invoked after each Fargate enqueue, plus a 1-minute schedule.
+  1. Reads the visible backlog of `fargate-p1..p4`.
+  2. Lists running tasks (`startedBy=helios-worker`, tags `role=warm|burst`).
+  3. Keeps `WARM_WORKERS` warm tasks running (`IDLE_EXIT=false`).
+  4. Starts `max(0, min(backlog, MAX_WORKERS) − running)` burst tasks, where backlog is visible plus in-flight messages across `fargate-p1..p4`: on-demand for a p1–p3 backlog, Fargate Spot when the only backlog is p4 and `WORKER_SPOT=true`.
+  5. Runs the **fan-out resumer**: `ANALYZING` requests older than `FANOUT_RESUME_AFTER_SEC` are re-enqueued to analyze, and `IN_PROGRESS` requests without `enqueuedAt` go to `launchRequest`. Each resume first claims the request by stamping `resumedAt`, so a request is only acted on when `resumedAt` is absent or older than the cutoff.
+  - The scaler and the resumer run independently in one handler: both always run, errors are collected and rethrown together.
+  - The scaler is set to reserved concurrency 1 (step 9).
+  - The scaler notification after an enqueue is a core `notifyScaler()` that invokes the Lambda asynchronously, throttled per process. `SCALER_NOTIFY=lambda|none` is explicit config: `none` locally, where the compose worker is always on.
+
+**`encoder` Lambda** = the worker image with a Lambda entrypoint (`worker/src/lambda.ts`, run via `aws-lambda-ric` in a `lambda` Dockerfile stage).
+
+- It handles `lambda-p1` and `lambda-ai` records with `processItem`, the same code path as Fargate.
+- Visibility is extended through `ChangeMessageVisibility` using the record's receipt handle.
+- A timeout or OOM leaves the message in the queue, so redrive moves it to Fargate. The Fargate worker reclaims the item once the lease goes stale.
+- `MaximumConcurrency` on the event source mapping is the concurrency cap (step 9 config).
+
+**Callback contract** (`contracts/src/webhooks.ts`; the SDK's `webhooks.verify` returns this typed union):
+
+- **Headers:** `Helios-Signature: t=<unix>,v1=<hex hmac_sha256(whsec, "<t>.<rawBody>")>`, `Helios-Event-Id` (stable per event, for consumer idempotency) and `Helios-Event`.
+- **Item events:** `item.completed | item.failed | item.skipped | item.cancelled`, with `{ requestId, assetId, item: { key, kind, profile?, status, error? }, outputs? }`. `outputs` are asset output views with CDN URLs.
+- **Request events:** `request.completed | request.failed | request.cancelled` with `{ request view, asset view }`, plus `asset.deleted` for purge requests.
+- Consumers verify the signature with a 5-minute tolerance and dedupe on `Helios-Event-Id`. They read terminal state from the payload; it is built from `job_reports` and the asset.
+- **Shared views:** the asset, request and output view mappers move from `api/src/views` to core `views/`, shared by the API and the callback payloads.
+
+**Local** (no LocalStack Lambda needed):
+
+- `local/lambdaRunner.ts` emulates the event source mappings. It long-polls `analyze`, `lambda-p1`, `lambda-ai`, `callbacks.fifo` and every DLQ, and invokes the real handlers in-process with SQS-shaped events. An unhandled failure leaves the message, so the real LocalStack redrive applies.
+- `local/webhookSink.ts` captures callbacks and verifies the HMAC.
+- Compose service `helios-lambdas`.
+- **e2e:** the full API flow with real callbacks; a forced Lambda failure redrives to Fargate and completes; a forced permanent failure goes through the DLQ to ERROR with a `request.failed` callback; the resumer picks up an injected stuck request.
+
+**Delivery destinations (added 2026-10-18): webhook or EventBridge.**
+
+- `destination` = `{ type: "webhook", url } | { type: "eventbridge", eventBusArn }`. It replaces `callbackUrl`; the API keeps `callbackUrl` as shorthand for the webhook type.
+- **Account default + per-request override:** the request's destination wins.
+- **EventBridge delivery:** cross-account `PutEvents` onto the customer's bus. Source `helios.<accountId>`, `DetailType` = event name, `Detail` = the same payload as the webhook body.
+  - The customer's bus resource policy grants Helios's AWS account `events:PutEvents`, with the condition `events:source = helios.<accountId>`.
+  - IAM authenticates, so there is no HMAC.
+  - `FailedEntryCount > 0` is treated like a non-2xx: same backoff, DLQ and delivery log.
+- **Validation:** the ARN format is checked (`arn:aws:events:<region>:<account>:event-bus/<name>`), and the account must not be Helios's (`HELIOS_AWS_ACCOUNT_ID`). Both fail with `InvalidEventBusArnError` (400). Webhook URLs must be https outside `STAGE=local`, checked at write and at delivery.
+- **Test events:** `POST /destinations/test` (account) and an admin equivalent send a `helios.test` event (sequence 0) to the configured or supplied destination, so a customer can verify their setup. Tests are cooled down per account (`DESTINATION_TEST_COOLDOWN_SEC`, 429 with `Retry-After`). AWS and socket errors map to fixed messages, so raw AWS text or role ARNs never reach responses or stored attempts.
+- **Customer self-service:** `GET/PUT /account/destination` sets the account default, so customers need no admin for it.
+- **Ordering:** every payload carries `createdAt` and a per-request `sequence`, because EventBridge doesn't guarantee order (the webhook path stays FIFO).
+- **Local:** LocalStack EventBridge, with a bus + rule targeting an SQS queue that the e2e reads.
+- **SDK:** documents EventBridge rule patterns for each event.
+- **Setup documentation (required):**
+  - An "EventBridge destination setup" guide in the API docs, as an OpenAPI tag description rendered at `/docs`, and mirrored in the SDK `README.md` and `AGENTS.md`. Step-by-step:
+    1. Create or choose a bus.
+    2. Attach the resource policy.
+    3. Set the destination on the account or request.
+    4. Send a test event.
+    5. Create rules (with example patterns per event).
+    6. Troubleshoot (AccessDenied, wrong region, bus not found).
+  - Helper endpoint `GET /destinations/eventbridge/policy?eventBusArn=…` returns the exact resource-policy JSON, with Helios's AWS account id (config `HELIOS_AWS_ACCOUNT_ID`) and the bus ARN filled in, ready to paste.
+  - The test-event response explains common failures in plain language.
+
+**Step 4 implementation (deviations and choices, 2026-10-18):**
+
+- **Scaler and resumer are split.** `runScaler()` (core `scaler/`, ECS and SQS only) and `resumeStuckRequests(now)` (core `pipeline/resumeStuck.ts`) are separate. `functions/src/scaler/handler.ts` composes them: scaling first, then the resumer. The local runner calls only `resumeStuckRequests`, so it never needs ECS settings.
+- **Config placement.** `SCALER_NOTIFY` (`none` | `lambda`, with `SCALER_FUNCTION_NAME` required for `lambda`), `SCALER_NOTIFY_MIN_INTERVAL_MS` and `FANOUT_RESUME_AFTER_SEC` live in core config, because the enqueue path and the resumer read them. The ECS settings (`ECS_CLUSTER`, `WORKER_TASK_DEFINITION`, `WORKER_SUBNETS`, `WORKER_SECURITY_GROUPS`, `WARM_WORKERS`, `MAX_WORKERS`, `WORKER_SPOT`) live in `scalerConfig()`, loaded only by the scaler. `WARM_WORKERS <= MAX_WORKERS` is validated.
+- **`WORKER_CONTAINER_NAME` added** (required). `RunTask` container overrides need the container name to set `IDLE_EXIT`.
+- **Fleet shape.** `RunTask` is called once per task. Tasks carry `startedBy=helios-worker` and tag `role`. `DescribeTasks` uses `include: ["TAGS"]`, which is needed to read the role. Warm tasks use `FARGATE` and burst tasks use `FARGATE` or `FARGATE_SPOT`.
+- **`planScaling` counts warm workers against `MAX_WORKERS`.** `startWarm = max(0, WARM - running.warm)`. `startBurst = max(0, min(backlog, MAX) - (running + startWarm))`. Spot applies only when the whole backlog is in `fargate-p4`.
+- **Notify is a single place.** `enqueueItems` (used by fan-out and by `releaseDependent`) calls `notifyScaler()` when any target is a `fargate-*` queue. `notifyScaler` throttles per process and never throws. A failed or throttled ping is an explicit design choice, not a fallback: the 1-minute schedule covers it.
+- **Resumer.** Each kind is bounded to 100 requests per run, oldest first. ANALYZING covers only `analyze: async`. IN_PROGRESS covers only requests without `enqueuedAt`. A failing request is logged and retried on the next run, so one bad request cannot starve the batch. Re-running is safe because enqueued requests drop out of the query.
+- **Lambda timeout keeps the lease.** The encoder aborts about 10 s before the timeout. `processItem` gets `releaseLeaseOnAbort: false` for Lambda, so the lease is left to expire, the attempt usage is recorded through `recordFailedAttempt`, and the record is returned as a batch failure. Fargate SIGTERM keeps the release path (`releaseLeaseOnAbort: true`).
+- **Batch failures need `ReportBatchItemFailures`** on the event source mapping (step 9). `handler` returns `batchItemFailures` and never throws for item errors. It also turns off `callbackWaitsForEmptyEventLoop`, so the open Mongo connection does not hold the response.
+- **Worker config** is a discriminated union on `WORKER_TIER`. The `lambda` tier takes memory from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and needs no fargate-only settings. Polling requires `fargateConfig()`.
+- **Queue API.** `Queue.changeVisibility` takes only `receiptHandle`, `Queue.approximateBacklog()` is added, and `queueFromArn(arn)` is added. The `FARGATE_QUEUE_NAMES` list is shared by the scaler and the worker.
+- **Image.** `worker/Dockerfile` has a `lambda` stage: `node:22-bookworm-slim` (digest pinned), static ffmpeg, and `aws-lambda-ric@4.0.2`, which builds a native addon. Build tools are installed and then purged in the same layer. The entrypoint is the RIC bin, and the image runs as `node`. The RIE is `aws-lambda-rie` v1.37 (x86_64, sha256 `6b1e686e62ab2baf5759c412c4864276ef2a88b094fca53ec070637ccba9b9a5`), mounted by the check and not baked into the image. A malformed-body event returns `batchItemFailures` through the RIE. A valid body reaches `initDb`, and with no Mongo it returns a batch failure.
+- **Dependencies.** `@aws-sdk/client-ecs` and `@aws-sdk/client-lambda` are pinned exactly at `3.1152.0`, matching `client-sqs`. `@types/aws-lambda` is pinned at `8.10.164` (dev).
+
+**Not in step 4:** packaging and deployment (serverless or CloudFormation, ECS task definitions), which come in step 9. The image Lambda is step 7.
+
+**Step 4 deviations (as built):**
+
+- `maxReceiveCount` for `callbacks.fifo` is 6 (`queueTopology` and bootstrap). Each of the five backoffs (30 s, 2 m, 10 m, 30 m, 2 h) leads to a retry, and the sixth failed receive moves the message to `callbacks-dlq`.
+- Request and asset fields in a payload reflect the asset at delivery time, not at creation time. Sequences can have gaps.
+- Dead-letter messages for a missing item, request, or delivery are logged as errors and acknowledged, so a poison message is not redelivered forever.
+- `Helios-Event-Id` is the envelope `id`: SHA-256 hex of `${requestId}:${itemId|final}`. Redeliveries keep it.
+- `createdAt` is the time of the attempt, and the payload is rebuilt on every attempt. `callback_deliveries.payload` holds the last envelope sent.
+- Request events read their status from the job report, because finalize sends the callback before it writes the request status. `job_reports` gains `completedAt` for that purpose.
+- `callback_deliveries` gains `status`: `PENDING` until settled, then `DELIVERED`, `FAILED` (DLQ) or `SKIPPED` (no URL).
+- An unsafe or private callback address is a retryable failure with the normal backoff, not a permanent failure.
+- A dead item settles with its stored `error` only, with no default message.
+- Destinations: built as the "Delivery destinations" addendum (EventBridge, the `destination` union, and the per-payload `sequence`). See the 2026-10-18 delivery destinations entry in the decisions log.
+- `CALLBACK_TIMEOUT_SEC` is required. It is set in `local/config.json` and in the core test env.
+- **2026-10-18 local lambda e2e:** in-process tests share one `WORKER_TIER` (the standalone runner sets `lambda` in `main()`, not `runLambdaSources`). Failure injection uses real conditions: a 5 s `lambda-p1` timeout for redrive, and a missing source key on a non-default preset for the DLQ. The e2e queues use `e2eVisibilityTimeoutSec` (30 s), and they are purged before each run. The callback retry keeps the 30 s schedule (no short-backoff config). The resumer e2e inserts both stuck kinds directly (ANALYZING with no analyze message, and an unlaunched IN_PROGRESS request), with no analyze message in either case.
+
 ## Local development & testing
+
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
 
 **Infra (decided 2026-10-17).**
+
 - **Default:** reuse the already-running shared `localstack` (:4566, pinned `localstack/localstack:4.14`) and `mongodb` (:27017, `rs0`).
   - The `helios` DB sits beside bella's, mirroring prod.
   - Kodak-style local buckets are in the same S3.
@@ -632,6 +782,7 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Secrets (`OPENAI_API_KEY`, etc.) stay in the git-ignored root `.env`.
 
 **Queue topology as code.**
+
 - `core/src/queue/topology.ts` is the single definition of every queue, its DLQ/redrive target and its `maxReceiveCount`:
   - `lambda-p1`→`fargate-p1` (2)
   - `lambda-ai`→`fargate-p3` (2)
@@ -640,6 +791,7 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - It is used by `npm run local:bootstrap` (creates queues + buckets in LocalStack, idempotent) and later by serverless config generation/tests, so local and AWS can't drift.
 
 **Local runners (no LocalStack Pro needed).**
+
 - **`local/lambdaRunner.ts`:** emulates SQS event-source mappings.
   - Long-polls `lambda-*` queues and invokes the real Lambda handlers in-process with an SQS event.
   - A thrown error or timeout leaves the message undeleted, so the real LocalStack redrive moves it to Fargate queues exactly as in AWS.
@@ -652,7 +804,17 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **`local/webhookSink.ts`:** captures callbacks, verifies HMAC, and exposes them to e2e tests.
 - **Fixtures:** `npm run local:fixtures` generates the test media with ffmpeg (`testsrc`/`sine`), so no binaries are committed: 16:9 1080p, 9:16 720p, 300p, no-audio, long, and image.
 
+**Local runners (as built, 2026-10-18).**
+
+- `local/lambdaRunner.ts` (`npm run local:lambdas`, compose `helios-lambdas`) emulates the SQS event source mappings for the analyze, lambda-p1/lambda-ai, callbacks and every DLQ queue.
+  - It calls the real functions and worker handlers with SQS-shaped records and a fake Lambda context, and it runs the resumer loop.
+  - It deletes a message only on success; the LocalStack redrive does the rest.
+  - It does not emulate Lambda scaling, ECS, EventBridge rules or the scaler.
+- `local/webhookSink.ts` is the shared webhook receiver for the e2e tests. It verifies the signature against the account secret and can force HTTP statuses.
+- The `worker/Dockerfile` test stage copies `functions`, so the compose service needs no `./functions` mount.
+
 **Test layers.**
+
 - **`npm test`:** unit + mongodb-memory-server. No Docker needed.
 - **`npm run test:local`:** a jest `*.e2e.ts` project against LocalStack + local Mongo, with `QUEUE_PREFIX=helios-e2e`. Each run uses a unique account and cleans up its own docs.
   - **Step 1:** fan-out lands messages in real queues with `MessageGroupId`/attributes; redrive `lambda-p1` → `fargate-p1` after 2 receives.
@@ -661,6 +823,7 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - **Steps 5–6:** run AI steps against real OpenAI only when `OPENAI_API_KEY` is set in `.env`.
 
 ## Verification
+
 - **Unit:**
   - Fan-out/filtering/defaults, `pendingDeps` release incl. `skipped` transcribe.
   - Completion handler idempotency: rerun after a simulated crash at each step leaves no duplicate enqueue and no double finalize.
@@ -699,6 +862,29 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **Commit (step 1):** on a `feat/scaffold-core` branch, then check in before step 2.
 
 ## Implementation decisions log
+
+- **2026-10-18 (step 4 review fixes and user decisions):**
+  - A. EventBridge `Source` is `helios.<accountId>`. The policy helper takes the authenticated account and adds `Condition: StringEquals events:source`. The CLI shorthand cannot express that condition, so the command is `put-permission --policy` with a merged policy (`--policy` replaces the whole bus policy; the guide shows the merge). The guide rules use the per-account source.
+  - B. Scaler target is `max(0, min(visible + in-flight across fargate-p1..p4, MAX_WORKERS) - running)`. The spot rule is unchanged.
+  - C. Webhook URLs must be https outside `STAGE=local`. The check runs at write (`assertDestination`) and at delivery (`postWebhook`), because the contract cannot see `STAGE`.
+  - D. A redelivery keeps the same `Helios-Event-Id`. The webhooks guide says this is for events the endpoint never received.
+  - Bus ARNs in Helios's own account are rejected with `InvalidEventBusArnError` (400) on writes and on test events. The regex check lives only in `parseEventBusArn`.
+  - Deviation: locally `HELIOS_AWS_ACCOUNT_ID` is `111111111111`, so the own-account check is meaningful. The local customer bus is in LocalStack's `000000000000`.
+  - `callbacks.fifo` `maxReceiveCount` is 6, in the topology and the bootstrap.
+  - The encoder Lambda and every functions handler reject a batch that is not exactly one record (`runRecords` and the encoder share the guard).
+  - `safePost` destroys the response instead of draining it.
+  - The resumer claims each request by stamping `resumedAt`, and it acts only when `resumedAt` is absent or older than the cutoff. Indexes support the claim.
+  - The scaler handler runs the scaler and the resumer independently: both always run, errors are collected, and an `AggregateError` is thrown after both finish. It uses `connectOnce`.
+  - Standalone LocalStack has `SERVICES: s3,sqs,events`. The bootstrap EventBridge setup stays.
+  - Customers set their default destination with `GET/PUT /account/destination`. Admins keep `PATCH /admin/accounts/:id`.
+  - `helios.test` is a member of `WebhookEventSchema` with sequence 0. Real events start at 1, and gaps are possible.
+  - The destination test endpoints have a per-account cooldown (`DESTINATION_TEST_COOLDOWN_SEC`, 429 with `Retry-After`). AWS and socket errors map to fixed messages in responses and in stored attempts. Distinct codes stay for the caller's own destination only.
+  - Dead-letter messages for a missing item, request or delivery are logged as errors and acknowledged.
+  - `CallbackDeliveryView` exposes `status`, and `destinationType` is updated on every attempt.
+  - Quality: one `queueNameFromArn` (core), `@types/aws-lambda` types in functions, one optional-kinds list (`OPTIONAL_ITEM_KINDS`), the local runner uses the core logger and caches queue URLs, bootstrap takes the visibility timeout as a required argument, and every OpenAPI operation has a tag.
+  - Approximate backlog counts visible plus not-visible messages (`ApproximateNumberOfMessagesNotVisible`).
+  - **Step 9 checks:** set the scaler's reserved concurrency to 1. Verify on real AWS that a `lambda-p1` → `fargate-p1` redrive receives the expected `ApproximateReceiveCount` on the first Fargate receive.
+
 - **2026-10-18 (step 3 API review, user decisions):**
   - A. Mongo unavailability answers 503 on every route with `Retry-After` (`RETRY_AFTER_SEC`, required). Approved as the deviation above.
   - B. `/docs` and `/openapi.json` require any valid account or admin key.
@@ -758,6 +944,14 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Ingest stores `application/octet-stream`. The probe JSON drops `format.filename`. ffprobe stderr is captured into the error, with the source URL redacted.
   - A request is `ERROR` with a `{code, message}` error. A repeat of an ANALYZING async request re-enqueues analyze (idempotent), and launches once the asset is analyzed.
   - Upload keys bind to one asset via a partial unique index on `media_assets.source.key` (type upload).
+- **2026-10-18 (step 4 Lambdas and scaler):**
+  - The scaler is split into `runScaler()` (ECS) and `resumeStuckRequests(now)`. The handler composes them, and the local runner calls only the resumer, so local never needs ECS settings.
+  - `SCALER_NOTIFY` is `none` or `lambda`, and `lambda` requires `SCALER_FUNCTION_NAME`. Notify is throttled per process and never throws. The 1-minute schedule covers suppressed or failed pings.
+  - Scaler ECS settings are validated only in the scaler, and they add `WORKER_CONTAINER_NAME`.
+  - Stuck-request resumer: 100 per kind per run, and a failure is isolated to its request.
+  - The encoder Lambda never releases the lease on a timeout. It records the usage and returns the batch failure, so the lease expires and SQS redrives the message after `maxReceiveCount`.
+  - `WORKER_TIER=lambda` reads memory from `AWS_LAMBDA_FUNCTION_MEMORY_SIZE` and needs no fargate-only settings.
+  - `aws-lambda-ric` 4.0.2 (published 2026-03-09), `aws-lambda-rie` v1.37 (published 2026-08-31), and `@aws-sdk/client-ecs` and `client-lambda` 3.1152.0 are all at least two weeks old.
 - **2026-10-18 (step 3 API libraries):**
   - Express 5.2.1, pinned. 5.3.0 was published 2026-10-09, less than two weeks before this entry.
   - `@asteasolutions/zod-to-openapi` 9.1.0, the zod 4 peer. Schemas stay in `contracts`, and the same endpoint specs drive routing, validation and OpenAPI.
@@ -765,3 +959,18 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Tests: `supertest` 7.2.2 with `@types/supertest` 7.2.1. OpenAPI validation uses `@readme/openapi-parser` 2.7.0, because `@apidevtools/swagger-parser` 13 is ESM-only under Jest 30.
   - `@types/express` 5.0.6 and `@types/swagger-ui-express` 4.1.8.
   - The API image is built from `api/Dockerfile`, pinned to the same base and ffmpeg digests as the worker. The runtime carries only `ffprobe`.
+- **2026-10-18:** callback destinations are webhook or EventBridge (cross-account PutEvents to the customer's bus), configured as an account default with a per-request override. The Stripe-style partner event source was rejected as unnecessary.
+- **2026-10-18 (step 4 Lambdas):**
+  - Callback signature is `t=<unix>,v1=<hex HMAC-SHA256>` over `<t>.<rawBody>`. Verification uses a 300 s tolerance and `timingSafeEqual`.
+  - Event ids are deterministic per request event or item event, so consumers dedupe redeliveries.
+  - Callback retries back off 30 s, 2 m, 10 m, 30 m and 2 h. A receive past the fifth reuses the 2 h step.
+  - Dead-letter items settle ERROR, or SKIPPED for `transcribe` and `scenes`. Failure detail comes only from the stored item error.
+- **2026-10-18 (delivery destinations addendum, built):**
+  - `destination` is `{type: "webhook", url} | {type: "eventbridge", eventBusArn}`. `callbackUrl` is shorthand for a webhook destination. Sending both is a 400. Account PATCH accepts `destination: null` to clear it.
+  - Request destination overrides the account default. A missing destination settles the delivery SKIPPED.
+  - `sequence` is assigned atomically with `requests.nextSequence` when a callback message is created. Redeliveries keep the stored sequence, and a manual redeliver gets a new one.
+  - Senders are dispatched by a `sendTo` switch in `core/src/callbacks/senders/`. `PutEvents` sends no `Resources`. Payloads of 256 KB or more fail at once with no retry.
+  - `POST /destinations/test` and `POST /admin/accounts/:id/destinations/test` send a synchronous `helios.test` event that writes no delivery row. `GET /destinations/eventbridge/policy` returns `{ policy, command }`.
+  - Guide markdown lives once in `docs/guides/*.md`. It is bundled with the esbuild text loader and read by a jest transform. `api/Dockerfile` copies `docs/guides`.
+  - `HELIOS_AWS_ACCOUNT_ID` is required (12 digits). Locally it is `111111111111`, and the local customer bus lives in LocalStack's `000000000000`, so the own-account check stays meaningful. `EVENTBRIDGE_ENDPOINT` is optional, for LocalStack.
+  - Local EventBridge e2e (`local/test/eventbridge.e2e.ts`): the shared LocalStack enables `events`, and the standalone profile now has `SERVICES: s3,sqs,events`.

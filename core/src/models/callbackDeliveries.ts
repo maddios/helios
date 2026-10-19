@@ -6,7 +6,9 @@ export const CallbackDeliverySchema = z.object({
 	_id: z.string(),
 	requestId: z.string(),
 	accountId: z.string(),
+	destinationType: z.enum(["webhook", "eventbridge"]).optional(),
 	event: z.string(),
+	status: z.enum(["PENDING", "DELIVERED", "FAILED", "SKIPPED"]),
 	payload: z.unknown(),
 	attempts: z.array(
 		z.object({

@@ -50,6 +50,7 @@ function input(overrides: Partial<ProcessItemInput> = {}): ProcessItemInput {
 		messageId: "msg-1",
 		extendVisibility: jest.fn().mockResolvedValue(undefined),
 		signal: new AbortController().signal,
+		releaseLeaseOnAbort: true,
 		...overrides
 	};
 }
@@ -284,6 +285,27 @@ describe("processItem", () => {
 
 		await expect(outcome).resolves.toBe("interrupted");
 		expect(releaseLease).toHaveBeenCalledWith(item._id, LEASE_ID, expect.any(Object));
+	});
+
+	it("keeps the lease, records the attempt usage and the abort reason when aborted without releasing", async () => {
+		claimed();
+		const controller = new AbortController();
+		handlerThat(async (ctx: { signal: AbortSignal }) => {
+			controller.abort(new Error("Lambda timeout approaching"));
+			ctx.signal.throwIfAborted();
+		});
+
+		await expect(processItem(input({ signal: controller.signal, releaseLeaseOnAbort: false }))).resolves.toBe(
+			"interrupted"
+		);
+
+		expect(releaseLease).not.toHaveBeenCalled();
+		expect(recordFailedAttempt).toHaveBeenCalledWith({
+			itemId: item._id,
+			leaseId: LEASE_ID,
+			usage: expect.objectContaining({ computeTier: "fargate" }),
+			error: "Lambda timeout approaching"
+		});
 	});
 
 	it("skips the item with the superseded reason and the attempt usage when the asset moved to a newer version", async () => {

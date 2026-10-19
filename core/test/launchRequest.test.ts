@@ -200,7 +200,7 @@ describe("launchRequest", () => {
 		expect(await pipelineItems().countDocuments({})).toBe(0);
 		expect(totalSendCalls()).toBe(0);
 		expect(await jobReports().findOne({ _id: request._id })).toMatchObject({ status: "ERROR", items: [] });
-		expect(sentCallbacks()).toEqual([{ type: "request", requestId: request._id }]);
+		expect(sentCallbacks()).toEqual([{ type: "request", requestId: request._id, sequence: 1 }]);
 	});
 
 	it("throws when the request's asset is missing", async () => {

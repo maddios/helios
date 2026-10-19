@@ -24,5 +24,6 @@ export interface Queue<T = unknown> {
 		signal?: AbortSignal
 	): Promise<ReceivedMessage<T>[]>;
 	ack(message: ReceivedMessage<T>): Promise<void>;
-	changeVisibility(message: ReceivedMessage<T>, seconds: number): Promise<void>;
+	changeVisibility(message: Pick<ReceivedMessage<T>, "receiptHandle">, seconds: number): Promise<void>;
+	approximateBacklog(): Promise<number>;
 }

@@ -4,6 +4,8 @@
 	"awsRegion": "us-east-2",
 	"awsAccessKeyId": "test",
 	"awsSecretAccessKey": "test",
+	"heliosAwsAccountId": "111111111111",
+	"localBusAccountId": "000000000000",
 	"mongoUri": "mongodb://localhost:27017/?replicaSet=rs0&directConnection=true",
 	"queuePrefix": "helios-local",
 	"e2eQueuePrefix": "helios-e2e",
@@ -14,7 +16,11 @@
 	"lambdaMaxDurationSec": 180,
 	"lambdaMaxSourceBytes": 524288000,
 	"logLevel": "debug",
+	"e2eLogLevel": "warn",
 	"sqsFairQueues": true,
+	"scalerNotify": "none",
+	"scalerNotifyMinIntervalMs": 5000,
+	"fanoutResumeAfterSec": 60,
 	"worker": {
 		"ffmpegPath": "ffmpeg",
 		"workDir": ".cache/work",
@@ -37,10 +43,25 @@
 	},
 	"sourceBucket": "helios-local-sources",
 	"ssrfAllowedHosts": "localhost,127.0.0.1",
+	"callbackTimeoutSec": 10,
+	"lambdas": {
+		"memoryMb": 2048,
+		"pollWaitSec": 5,
+		"resumeIntervalSec": 60,
+		"timeoutsSec": {
+			"analyze": 60,
+			"lambda-p1": 180,
+			"lambda-ai": 180,
+			"callbacks.fifo": 30,
+			"dlq": 30
+		},
+		"e2eVisibilityTimeoutSec": 30
+	},
 	"api": {
 		"port": 3100,
 		"retryAfterSec": 5,
 		"shutdownDrainSec": 25,
-		"redeliverCooldownSec": 60
+		"redeliverCooldownSec": 60,
+		"destinationTestCooldownSec": 60
 	}
 }

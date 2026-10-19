@@ -7,6 +7,7 @@ const schema = z.object({
 	RETRY_AFTER_SEC: z.coerce.number().int().positive(),
 	SHUTDOWN_DRAIN_SEC: z.coerce.number().int().positive(),
 	REDELIVER_COOLDOWN_SEC: z.coerce.number().int().positive(),
+	DESTINATION_TEST_COOLDOWN_SEC: z.coerce.number().int().positive(),
 	ANALYZE_TIMEOUT_SEC: z.coerce
 		.number()
 		.int()

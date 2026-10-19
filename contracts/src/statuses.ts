@@ -13,6 +13,13 @@ export type RequestStatus = z.infer<typeof RequestStatusSchema>;
 export const ItemKindSchema = z.enum(["encode", "transcribe", "scenes", "purge"]).describe("Pipeline item kind");
 export type ItemKind = z.infer<typeof ItemKindSchema>;
 
+export const OPTIONAL_ITEM_KINDS = ["transcribe", "scenes"] as const satisfies readonly ItemKind[];
+export type OptionalItemKind = (typeof OPTIONAL_ITEM_KINDS)[number];
+
+export function isOptionalKind(kind: ItemKind): kind is OptionalItemKind {
+	return (OPTIONAL_ITEM_KINDS as readonly ItemKind[]).includes(kind);
+}
+
 export const RequestModeSchema = z
 	.enum(["encode", "reencode", "postProcess", "purge"])
 	.describe("Request mode describing what the request does");

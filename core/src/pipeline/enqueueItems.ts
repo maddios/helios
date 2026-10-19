@@ -1,5 +1,6 @@
 import type { PipelineItem } from "../models";
-import { queueFor } from "../queue";
+import { isFargateQueue, queueFor } from "../queue";
+import { notifyScaler } from "../scaler";
 import { itemMessage } from "./itemMessage";
 import type { ItemMessage } from "./types";
 
@@ -10,4 +11,7 @@ export async function enqueueItems(items: PipelineItem[]): Promise<void> {
 			queueFor<ItemMessage>(name).sendBatch(items.filter((item) => item.queue === name).map(itemMessage))
 		)
 	);
+	if (queueNames.some(isFargateQueue)) {
+		await notifyScaler();
+	}
 }

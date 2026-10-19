@@ -56,7 +56,7 @@ describe("requestPurge", () => {
 
 		await completeItem({ itemId: `${request._id}:purge`, status: "COMPLETE", output: {} });
 
-		expect(sentCallbacks()).toContainEqual({ type: "request", requestId: request._id });
+		expect(sentCallbacks()).toContainEqual({ type: "request", requestId: request._id, sequence: 2 });
 	});
 
 	it("throws NotFoundError for an unknown asset", async () => {

@@ -21,7 +21,9 @@ function delivery(id: string, accountId: string, createdAt: Date): CallbackDeliv
 		_id: id,
 		requestId: "req-1",
 		accountId,
+		destinationType: "webhook",
 		event: "request.complete",
+		status: "PENDING",
 		payload: { type: "request" },
 		attempts: [],
 		createdAt
@@ -107,12 +109,13 @@ describe("callbacks", () => {
 
 			expect(mockSend).toHaveBeenCalledTimes(2);
 			expect(mockSend).toHaveBeenCalledWith({
-				body: { type: "request", requestId: "req-1" },
+				body: { type: "request", requestId: "req-1", sequence: 1 },
 				groupId: "req-1",
 				deduplicationId: expect.any(String)
 			});
 			const [first, second] = mockSend.mock.calls.map((call) => call[0].deduplicationId);
 			expect(first).not.toBe(second);
+			expect(mockSend.mock.calls.map(([message]) => message.body.sequence)).toEqual([1, 2]);
 		});
 	});
 });

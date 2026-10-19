@@ -30,6 +30,7 @@ export interface ProcessItemInput {
 	messageId: string;
 	extendVisibility: (seconds: number) => Promise<void>;
 	signal: AbortSignal;
+	releaseLeaseOnAbort: boolean;
 }
 
 class CancelledError extends Error {
@@ -147,7 +148,11 @@ async function failedOutcome(attempt: Attempt, err: unknown): Promise<ItemOutcom
 	const { itemId } = input;
 	const usage: Usage = attemptUsage(elapsedSec(startedAt));
 	if (input.signal.aborted) {
-		await releaseLease(itemId, claim.leaseId, usage);
+		if (input.releaseLeaseOnAbort) {
+			await releaseLease(itemId, claim.leaseId, usage);
+		} else {
+			await recordFailedAttempt({ itemId, leaseId: claim.leaseId, usage, error: errorText(input.signal.reason) });
+		}
 		return "interrupted";
 	}
 	if (signal.reason instanceof LeaseLostError) {
@@ -189,16 +194,21 @@ async function loadAssetAndSlug(item: PipelineItem): Promise<{ asset: MediaAsset
 }
 
 function attemptUsage(computeSec: number, outputBytes?: number): Usage {
-	const { WORKER_TIER, WORKER_MEMORY_MB, WORKER_VCPU, WORKER_SPOT } = config();
+	const cfg = config();
 	const common = {
 		computeSec,
-		memoryMb: WORKER_MEMORY_MB,
 		...(outputBytes !== undefined && { outputBytes })
 	};
-	if (WORKER_TIER === "lambda") {
-		return { computeTier: "lambda", ...common };
+	if (cfg.WORKER_TIER === "lambda") {
+		return { computeTier: "lambda", memoryMb: cfg.AWS_LAMBDA_FUNCTION_MEMORY_SIZE, ...common };
 	}
-	return { computeTier: "fargate", vcpu: WORKER_VCPU, spot: WORKER_SPOT, ...common };
+	return {
+		computeTier: "fargate",
+		memoryMb: cfg.WORKER_MEMORY_MB,
+		vcpu: cfg.WORKER_VCPU,
+		spot: cfg.WORKER_SPOT,
+		...common
+	};
 }
 
 function elapsedSec(startedAt: number): number {

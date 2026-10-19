@@ -14,11 +14,11 @@ import {
 	listAssets,
 	listTranscripts,
 	requestPurge,
-	setActiveStill
+	setActiveStill,
+	toAssetViews
 } from "@helios/core";
 import { endpoint } from "../http/endpoint";
 import { reply } from "../http/reply";
-import { toAssetViews } from "../views/asset";
 import { toSceneAnalysisView, toTranscriptView } from "../views/analysis";
 import { IdParams } from "./params";
 

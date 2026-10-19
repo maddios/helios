@@ -13,6 +13,13 @@ export const CallbackDeliveryViewSchema = z
 		id: z.string().describe("Delivery id"),
 		requestId: z.string().describe("Id of the request that triggered the callback"),
 		event: z.string().describe("Event name sent to the receiver"),
+		status: z
+			.enum(["PENDING", "DELIVERED", "FAILED", "SKIPPED"])
+			.describe("PENDING until settled; SKIPPED when the request had no destination"),
+		destinationType: z
+			.enum(["webhook", "eventbridge"])
+			.optional()
+			.describe("Type of the destination the last attempt used"),
 		attempts: z.array(CallbackAttemptSchema).describe("Delivery attempts in order"),
 		deliveredAt: z.iso.datetime().optional().describe("When the callback was delivered"),
 		createdAt: z.iso.datetime().describe("When the delivery was created")

@@ -5,6 +5,7 @@ import {
 	PresetSchema,
 	RequestErrorSchema,
 	RequestModeSchema,
+	DestinationSchema,
 	RequestStatusSchema,
 	ResolvedPostProcessSchema
 } from "@helios/contracts";
@@ -23,10 +24,12 @@ const RequestBaseSchema = z.object({
 	pendingItems: z.array(z.string()),
 	status: RequestStatusSchema,
 	error: RequestErrorSchema.optional(),
-	callbackUrl: z.string().optional(),
+	destination: DestinationSchema.optional(),
+	nextSequence: z.int().nonnegative().optional(),
 	completedAt: z.date().optional(),
 	lastRedeliverAt: z.date().optional(),
 	enqueuedAt: z.date().optional(),
+	resumedAt: z.date().optional(),
 	createdAt: z.date()
 });
 
@@ -48,6 +51,6 @@ export const requestIndexes: IndexDescription[] = [
 	{ key: { accountId: 1, clientRequestId: 1 }, unique: true },
 	{ key: { accountId: 1, assetId: 1 } },
 	{ key: { accountId: 1, createdAt: -1 } },
-	{ key: { enqueuedAt: 1, createdAt: 1 }, partialFilterExpression: { status: "IN_PROGRESS" } },
-	{ key: { status: 1, createdAt: 1 }, partialFilterExpression: { status: "ANALYZING" } }
+	{ key: { enqueuedAt: 1, resumedAt: 1, createdAt: 1 }, partialFilterExpression: { status: "IN_PROGRESS" } },
+	{ key: { resumedAt: 1, createdAt: 1 }, partialFilterExpression: { status: "ANALYZING" } }
 ];

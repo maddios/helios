@@ -16,3 +16,4 @@ export * from "./usage";
 export * from "./adminAccounts";
 export * from "./adminApiKeys";
 export * from "./adminUsage";
+export * from "./destinations";

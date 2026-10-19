@@ -1,28 +1,30 @@
-import { NotFoundError, type UpdateAccountRequest } from "@helios/contracts";
+import { NotFoundError, type Destination, type UpdateAccountRequest } from "@helios/contracts";
 import type { UpdateFilter } from "mongodb";
+import { assertDestination } from "../destinations";
 import { accounts, type Account } from "../models";
-import { assertPublicUrl } from "../ssrf";
 import { assertSourceBuckets } from "./assertSourceBuckets";
 import { getAccount } from "./getAccount";
 
-function buildUpdate(patch: UpdateAccountRequest, existing: Account): UpdateFilter<Account> {
+export type AccountPatch = Omit<UpdateAccountRequest, "destination"> & { destination?: Destination | null };
+
+function buildUpdate(patch: AccountPatch, existing: Account): UpdateFilter<Account> {
 	const set: Partial<Account> = {};
 	if (patch.name !== undefined) set.name = patch.name;
 	if (patch.sourceBuckets !== undefined) set.sourceBuckets = patch.sourceBuckets;
-	if (typeof patch.callbackUrl === "string") set.callbackUrl = patch.callbackUrl;
+	if (patch.destination) set.destination = patch.destination;
 	if (patch.features !== undefined) set.features = { ...existing.features, ...patch.features };
 	const update: UpdateFilter<Account> = { $set: set };
-	if (patch.callbackUrl === null) update.$unset = { callbackUrl: "" };
+	if (patch.destination === null) update.$unset = { destination: "" };
 	return update;
 }
 
-export async function updateAccount(id: string, patch: UpdateAccountRequest): Promise<Account> {
+export async function updateAccount(id: string, patch: AccountPatch): Promise<Account> {
 	const existing = await getAccount(id);
 	if (patch.sourceBuckets !== undefined) {
 		assertSourceBuckets(patch.sourceBuckets);
 	}
-	if (patch.callbackUrl) {
-		await assertPublicUrl(patch.callbackUrl);
+	if (patch.destination) {
+		await assertDestination(patch.destination);
 	}
 
 	const updated = await accounts().findOneAndUpdate({ _id: id }, buildUpdate(patch, existing), {

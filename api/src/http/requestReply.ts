@@ -1,6 +1,5 @@
 import { UnprocessableError, type AnalyzeMode, type RequestView } from "@helios/contracts";
-import type { CreateRequestResult } from "@helios/core";
-import { toRequestView } from "../views/request";
+import { toRequestView, type CreateRequestResult } from "@helios/core";
 import { reply, type Reply } from "./reply";
 
 const SYNC_FAILURE_CODES = new Set([

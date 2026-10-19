@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { IndexDescription } from "mongodb";
+import { DestinationSchema } from "@helios/contracts";
 import { db } from "../db";
 
 export const AccountSchema = z.object({
@@ -7,8 +8,9 @@ export const AccountSchema = z.object({
 	slug: z.string(),
 	name: z.string(),
 	sourceBuckets: z.array(z.string()),
-	callbackUrl: z.string().optional(),
+	destination: DestinationSchema.optional(),
 	webhookSecret: z.string(),
+	lastDestinationTestAt: z.date().optional(),
 	features: z.object({
 		peopleAttributes: z.boolean()
 	}),

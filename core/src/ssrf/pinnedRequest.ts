@@ -1,19 +1,30 @@
-import { request as httpRequest, type IncomingMessage } from "node:http";
+import { request as httpRequest, type IncomingMessage, type OutgoingHttpHeaders } from "node:http";
 import { request as httpsRequest } from "node:https";
 import type { LookupFunction } from "node:net";
-import { config } from "../config";
 import type { ResolvedUrl } from "./assertPublicUrl";
 
 const MS_PER_SEC = 1000;
 
-export function pinnedGet(target: ResolvedUrl): Promise<IncomingMessage> {
-	const timeoutMs = config().INGEST_TIMEOUT_SEC * MS_PER_SEC;
+export interface PinnedRequestOptions {
+	method: "GET" | "POST";
+	timeoutSec: number;
+	headers?: OutgoingHttpHeaders;
+	body?: string;
+}
+
+export function pinnedRequest(target: ResolvedUrl, options: PinnedRequestOptions): Promise<IncomingMessage> {
+	const timeoutMs = options.timeoutSec * MS_PER_SEC;
 	return new Promise((resolve, reject) => {
-		const options = { agent: false, lookup: pinnedLookup(target) };
+		const requestOptions = {
+			agent: false,
+			lookup: pinnedLookup(target),
+			method: options.method,
+			headers: options.headers
+		};
 		const request =
 			target.url.protocol === "https:"
-				? httpsRequest(target.url, options, onResponse)
-				: httpRequest(target.url, options, onResponse);
+				? httpsRequest(target.url, requestOptions, onResponse)
+				: httpRequest(target.url, requestOptions, onResponse);
 		const timer = setTimeout(
 			() => request.destroy(new Error(`No response within ${timeoutMs / MS_PER_SEC} seconds`)),
 			timeoutMs
@@ -27,7 +38,7 @@ export function pinnedGet(target: ResolvedUrl): Promise<IncomingMessage> {
 			clearTimeout(timer);
 			reject(err);
 		});
-		request.end();
+		request.end(options.body);
 	});
 }
 

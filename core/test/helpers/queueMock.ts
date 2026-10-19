@@ -1,3 +1,5 @@
+export { isFargateQueue, queueNameFromArn } from "../../src/queue/topology";
+
 const senders = new Map<string, { send: jest.Mock; sendBatch: jest.Mock }>();
 
 export function queueFor(name: string) {

@@ -32,6 +32,7 @@ export async function storeReportOnce(request: PipelineRequest, now: Date, repor
 					accountId: request.accountId,
 					assetId: request.assetId,
 					createdAt: now,
+					completedAt: now,
 					...report
 				}
 			},

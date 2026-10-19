@@ -1,0 +1,12 @@
+{
+	"name": "@helios/functions",
+	"version": "0.1.0",
+	"private": true,
+	"main": "src/index.ts",
+	"types": "src/index.ts",
+	"dependencies": {
+		"@helios/contracts": "0.1.0",
+		"@helios/core": "0.1.0",
+		"zod": "^4.6.7"
+	}
+}

@@ -1,6 +1,7 @@
 import {
 	ChangeMessageVisibilityCommand,
 	DeleteMessageCommand,
+	GetQueueAttributesCommand,
 	GetQueueUrlCommand,
 	ReceiveMessageCommand,
 	SendMessageBatchCommand,
@@ -118,7 +119,7 @@ export class SqsQueue<T> implements Queue<T> {
 		);
 	}
 
-	async changeVisibility(message: ReceivedMessage<T>, seconds: number): Promise<void> {
+	async changeVisibility(message: Pick<ReceivedMessage<T>, "receiptHandle">, seconds: number): Promise<void> {
 		await this.client.send(
 			new ChangeMessageVisibilityCommand({
 				QueueUrl: await this.queueUrl(),
@@ -126,6 +127,21 @@ export class SqsQueue<T> implements Queue<T> {
 				VisibilityTimeout: seconds
 			})
 		);
+	}
+
+	async approximateBacklog(): Promise<number> {
+		const { Attributes } = await this.client.send(
+			new GetQueueAttributesCommand({
+				QueueUrl: await this.queueUrl(),
+				AttributeNames: ["ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible"]
+			})
+		);
+		const visible = Attributes?.ApproximateNumberOfMessages;
+		const inFlight = Attributes?.ApproximateNumberOfMessagesNotVisible;
+		if (visible === undefined || inFlight === undefined) {
+			throw new Error(`No message counts returned for queue ${this.fullQueueName}`);
+		}
+		return Number(visible) + Number(inFlight);
 	}
 
 	private async queueUrl(): Promise<string> {

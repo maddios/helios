@@ -114,7 +114,7 @@ async function pollUntil(read: () => Promise<Message[]>, count: number): Promise
 
 describe("createRequest against real queues", () => {
 	beforeAll(async () => {
-		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
+		await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket], local.worker.visibilityExtensionSec);
 		await purgeAll();
 		await initDb(local.mongoUri);
 		await ensureIndexes();

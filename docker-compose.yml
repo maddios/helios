@@ -7,7 +7,7 @@ services:
     ports:
       - "4666:4566"
     environment:
-      SERVICES: s3,sqs
+      SERVICES: s3,sqs,events
   mongo:
     image: mongodb/mongodb-atlas-local:8.0
     profiles: ["standalone"]
@@ -33,3 +33,13 @@ services:
     volumes:
       - ./local:/app/local:ro
     command: ["npx", "tsx", "local/runApi.ts"]
+  helios-lambdas:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      target: test
+    init: true
+    network_mode: host
+    volumes:
+      - ./local:/app/local:ro
+    command: ["npx", "tsx", "local/lambdaRunner.ts"]

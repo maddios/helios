@@ -10,7 +10,12 @@ const hostList = z.string().transform((value) =>
 		.filter((host) => host.length > 0)
 );
 
-const schema = z
+const scalerNotifySchema = z.discriminatedUnion("SCALER_NOTIFY", [
+	z.object({ SCALER_NOTIFY: z.literal("none") }),
+	z.object({ SCALER_NOTIFY: z.literal("lambda"), SCALER_FUNCTION_NAME: z.string().min(1) })
+]);
+
+const baseSchema = z
 	.object({
 		STAGE: StageSchema,
 		MONGO_URI: z.string().min(1),
@@ -27,7 +32,10 @@ const schema = z
 		UPLOAD_URL_EXPIRY_SEC: z.coerce.number().int().positive(),
 		MAX_UPLOAD_BYTES: z.coerce.number().int().positive(),
 		SSRF_ALLOWED_HOSTS: hostList,
-		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive()
+		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive(),
+		SCALER_NOTIFY_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative(),
+		FANOUT_RESUME_AFTER_SEC: z.coerce.number().int().positive(),
+		HELIOS_AWS_ACCOUNT_ID: z.string().regex(/^\d{12}$/)
 	})
 	.superRefine((value, ctx) => {
 		if (value.STAGE !== "local" && value.SSRF_ALLOWED_HOSTS.length > 0) {
@@ -38,6 +46,8 @@ const schema = z
 			});
 		}
 	});
+
+const schema = z.intersection(baseSchema, scalerNotifySchema);
 
 export type Config = z.infer<typeof schema>;
 

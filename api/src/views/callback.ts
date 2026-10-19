@@ -6,6 +6,8 @@ export function toCallbackView(delivery: CallbackDelivery): CallbackDeliveryView
 		id: delivery._id,
 		requestId: delivery.requestId,
 		event: delivery.event,
+		status: delivery.status,
+		...(delivery.destinationType !== undefined && { destinationType: delivery.destinationType }),
 		attempts: delivery.attempts.map((attempt) => ({
 			at: attempt.at.toISOString(),
 			status: attempt.status,

@@ -145,9 +145,12 @@ describe("callback URLs", () => {
 		}
 	});
 
-	it("lets an account update clear callbackUrl with null", () => {
-		expect(UpdateAccountRequestSchema.safeParse({ callbackUrl: null }).success).toBe(true);
+	it("accepts a destination or callbackUrl on an account update", () => {
+		expect(UpdateAccountRequestSchema.safeParse({ name: "a" }).success).toBe(true);
 		expect(UpdateAccountRequestSchema.safeParse({ callbackUrl: "ftp://example.com" }).success).toBe(false);
+		expect(
+			UpdateAccountRequestSchema.safeParse({ destination: { type: "eventbridge", eventBusArn: "bad" } }).success
+		).toBe(false);
 	});
 });
 

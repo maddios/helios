@@ -1,12 +1,12 @@
 import { z } from "zod";
 import { PostProcessRequestSchema } from "../postProcess";
-import { CallbackUrlSchema } from "./common";
+import { DestinationInputSchema } from "../destinations";
 
 export const AssetPostProcessRequestSchema = z
 	.object({
 		postProcess: PostProcessRequestSchema.optional().describe("Post-processing to run on the asset"),
-		requestId: z.uuid().optional().describe("Client idempotency key, stored as clientRequestId"),
-		callbackUrl: CallbackUrlSchema.optional().describe("URL notified when the request finishes")
+		requestId: z.uuid().optional().describe("Client idempotency key, stored as clientRequestId")
 	})
+	.and(DestinationInputSchema)
 	.meta({ id: "AssetPostProcessRequest" });
 export type AssetPostProcessRequest = z.infer<typeof AssetPostProcessRequestSchema>;

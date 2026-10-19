@@ -1,10 +1,17 @@
 import type { QueueName } from "@helios/contracts";
-import { contextLogger, queueFor, type ItemMessage, type Queue, type ReceivedMessage } from "@helios/core";
+import {
+	contextLogger,
+	FARGATE_QUEUE_NAMES,
+	queueFor,
+	type ItemMessage,
+	type Queue,
+	type ReceivedMessage
+} from "@helios/core";
 import { setTimeout as sleep } from "node:timers/promises";
-import { config } from "./config";
+import { fargateConfig } from "./config";
 import { processItem, type ItemOutcome } from "./processItem";
 
-export const WORKER_QUEUES: QueueName[] = ["fargate-p1", "fargate-p2", "fargate-p3", "fargate-p4"];
+export const WORKER_QUEUES = FARGATE_QUEUE_NAMES;
 export const LONG_POLL_SEC = 5;
 export const POLL_ERROR_BACKOFF_MS = 1000;
 
@@ -26,7 +33,7 @@ export interface RunWorkerOptions {
 }
 
 export async function runWorker({ signal = new AbortController().signal }: RunWorkerOptions = {}): Promise<void> {
-	const { IDLE_EXIT, WORKER_IDLE_TIMEOUT_SEC } = config();
+	const { IDLE_EXIT, WORKER_IDLE_TIMEOUT_SEC } = fargateConfig();
 	let lastActivityAt = Date.now();
 	while (!signal.aborted) {
 		if (await pollRound(signal)) {
@@ -87,7 +94,8 @@ async function runItem(
 			itemId: message.body.itemId,
 			messageId: message.id,
 			extendVisibility: (seconds) => queue.changeVisibility(message, seconds),
-			signal
+			signal,
+			releaseLeaseOnAbort: true
 		});
 	} catch (err) {
 		contextLogger({ itemId: message.body.itemId }).error(

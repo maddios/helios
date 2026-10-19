@@ -8,10 +8,12 @@ COPY contracts/package.json contracts/
 COPY core/package.json core/
 COPY worker/package.json worker/
 COPY api/package.json api/
+COPY functions/package.json functions/
 RUN npm ci
 COPY contracts contracts
 COPY core core
 COPY api api
+COPY docs/guides docs/guides
 RUN npm run build:api
 
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS runtime
@@ -35,8 +37,10 @@ COPY contracts/package.json contracts/
 COPY core/package.json core/
 COPY worker/package.json worker/
 COPY api/package.json api/
+COPY functions/package.json functions/
 RUN npm ci
 COPY contracts contracts
 COPY core core
 COPY api api
+COPY docs/guides docs/guides
 CMD ["npx", "tsx", "local/runApi.ts"]

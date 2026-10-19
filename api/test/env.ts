@@ -6,3 +6,4 @@ process.env.API_PORT = "0";
 process.env.RETRY_AFTER_SEC = "5";
 process.env.SHUTDOWN_DRAIN_SEC = "2";
 process.env.REDELIVER_COOLDOWN_SEC = "60";
+process.env.DESTINATION_TEST_COOLDOWN_SEC = "60";

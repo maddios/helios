@@ -1,11 +1,5 @@
-import type { ItemKind, PostProcessStatus } from "@helios/contracts";
+import { isOptionalKind, OPTIONAL_ITEM_KINDS, type PostProcessStatus } from "@helios/contracts";
 import { pipelineItems } from "../models";
-
-type PostProcessKind = keyof PostProcessStatus;
-
-function isPostProcessKind(kind: ItemKind): kind is PostProcessKind {
-	return kind === "transcribe" || kind === "scenes";
-}
 
 export async function postProcessStatusOf(
 	accountId: string,
@@ -13,12 +7,12 @@ export async function postProcessStatusOf(
 ): Promise<Map<string, PostProcessStatus>> {
 	const statuses = new Map<string, PostProcessStatus>(assetIds.map((assetId) => [assetId, {}]));
 	const items = await pipelineItems()
-		.find({ accountId, assetId: { $in: assetIds }, kind: { $in: ["transcribe", "scenes"] } })
+		.find({ accountId, assetId: { $in: assetIds }, kind: { $in: [...OPTIONAL_ITEM_KINDS] } })
 		.sort({ createdAt: -1 })
 		.toArray();
 	for (const item of items) {
 		const status = statuses.get(item.assetId);
-		if (status !== undefined && isPostProcessKind(item.kind) && status[item.kind] === undefined) {
+		if (status !== undefined && isOptionalKind(item.kind) && status[item.kind] === undefined) {
 			status[item.kind] = item.status;
 		}
 	}

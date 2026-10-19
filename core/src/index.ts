@@ -13,18 +13,27 @@ export * from "./presetAdmin";
 export * from "./uploads";
 export * from "./usage";
 export * from "./callbacks";
+export * from "./destinations";
 export * from "./cdn";
 export * from "./analyze";
 export * from "./intake";
+export * from "./scaler";
+export * from "./views";
+export * from "./webhooks";
 export { config, type Config } from "./config";
 export {
 	queueFor,
+	queueFromArn,
+	queueNameFromArn,
 	SqsQueue,
 	dlqName,
+	FARGATE_QUEUE_NAMES,
 	fullQueueName,
+	isFargateQueue,
 	isFifoName,
 	queueTopology,
 	type AnyQueueName,
+	type FargateQueueName,
 	type OutgoingMessage,
 	type Queue,
 	type QueueSpec,

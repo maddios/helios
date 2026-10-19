@@ -5,7 +5,9 @@ import type {
 	PostProcessStatus,
 	SourceMetadata
 } from "@helios/contracts";
-import { cdnUrl, postProcessStatusOf, type MediaAsset, type MediaAssetSource } from "@helios/core";
+import { cdnUrl } from "../cdn";
+import { postProcessStatusOf } from "../assets";
+import type { MediaAsset, MediaAssetSource } from "../models";
 
 export async function toAssetViews(accountId: string, assets: MediaAsset[]): Promise<AssetView[]> {
 	const statuses = await postProcessStatusOf(
@@ -13,6 +15,13 @@ export async function toAssetViews(accountId: string, assets: MediaAsset[]): Pro
 		assets.map((asset) => asset._id)
 	);
 	return assets.map((asset) => toAssetView(asset, statuses.get(asset._id) ?? {}));
+}
+
+export function toOutputViews(
+	outputs: Record<string, MediaAssetOutput>,
+	version: number
+): Record<string, AssetOutputView> {
+	return Object.fromEntries(Object.entries(outputs).map(([name, output]) => [name, toOutputView(output, version)]));
 }
 
 function toAssetView(asset: MediaAsset, postProcess: PostProcessStatus): AssetView {
@@ -24,9 +33,7 @@ function toAssetView(asset: MediaAsset, postProcess: PostProcessStatus): AssetVi
 		...(asset.presetName !== undefined && { presetName: asset.presetName }),
 		...(asset.presetVersion !== undefined && { presetVersion: asset.presetVersion }),
 		version: asset.version,
-		outputs: Object.fromEntries(
-			Object.entries(asset.outputs).map(([name, output]) => [name, toOutputView(output, asset.version)])
-		),
+		outputs: toOutputViews(asset.outputs, asset.version),
 		...(asset.activeStill !== undefined && { activeStill: asset.activeStill }),
 		postProcess,
 		createdAt: asset.createdAt.toISOString(),

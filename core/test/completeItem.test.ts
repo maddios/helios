@@ -58,7 +58,7 @@ function itemId(key: string): string {
 }
 
 function sentTo(queue: string) {
-	return jest.mocked(queueFor<ItemMessage>(queue as never).send).mock.calls.map(([message]) => message);
+	return jest.mocked(queueFor<ItemMessage>(queue as never).sendBatch).mock.calls.flatMap(([messages]) => messages);
 }
 
 function sentCallbacks() {
@@ -125,7 +125,7 @@ describe("completeItem", () => {
 		await claimAndComplete("mp4_360");
 		await claimAndComplete("transcribe");
 
-		expect(jest.mocked(queueFor<ItemMessage>("lambda-ai" as never).send).mock.calls[0][0]).toMatchObject({
+		expect(jest.mocked(queueFor<ItemMessage>("lambda-ai" as never).sendBatch).mock.calls[0][0][0]).toMatchObject({
 			groupId: "account-1",
 			attributes: { accountId: "account-1", requestId, itemId: itemId("scenes"), assetId: "asset-1" }
 		});
@@ -136,7 +136,7 @@ describe("completeItem", () => {
 
 		expect(sentCallbacks()).toEqual([
 			{
-				body: { type: "item", requestId, itemId: itemId("mp4_360") },
+				body: { type: "item", requestId, itemId: itemId("mp4_360"), sequence: 1 },
 				groupId: requestId,
 				deduplicationId: `${itemId("mp4_360")}:item`
 			}
@@ -174,8 +174,13 @@ describe("completeItem", () => {
 			resourceUnits: { lambdaGbSeconds: 12, fargateVcpuSeconds: 0, fargateSpotVcpuSeconds: 0, llmTokens: {} },
 			items: expect.arrayContaining([expect.objectContaining({ itemId: itemId("scenes"), status: "COMPLETE" })])
 		});
+		const itemCallbacks = sentCallbacks().filter((message) => message.body.type === "item");
 		expect(sentCallbacks().filter((message) => message.body.type === "request")).toEqual([
-			{ body: { type: "request", requestId }, groupId: requestId, deduplicationId: `${requestId}:final` }
+			{
+				body: { type: "request", requestId, sequence: itemCallbacks.length + 1 },
+				groupId: requestId,
+				deduplicationId: `${requestId}:final`
+			}
 		]);
 	});
 

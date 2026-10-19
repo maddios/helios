@@ -17,7 +17,7 @@ describe("queueTopology", () => {
 
 	it("gives analyze, fargate queues and callbacks a dead-letter queue", () => {
 		for (const name of ["analyze", "fargate-p1", "fargate-p2", "fargate-p3", "fargate-p4", "callbacks.fifo"]) {
-			expect(redriveOf(name)).toEqual({ target: "dlq", maxReceiveCount: name === "callbacks.fifo" ? 5 : 3 });
+			expect(redriveOf(name)).toEqual({ target: "dlq", maxReceiveCount: name === "callbacks.fifo" ? 6 : 3 });
 		}
 	});
 

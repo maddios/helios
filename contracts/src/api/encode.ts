@@ -4,7 +4,7 @@ import { SourceMetadataSchema } from "../sourceMetadata";
 import { AnalyzeModeSchema, ItemKindSchema, ItemStatusSchema } from "../statuses";
 import { ItemQueueNameSchema } from "../queues";
 import { PresetNameSchema } from "../preset";
-import { CallbackUrlSchema } from "./common";
+import { DestinationInputSchema } from "../destinations";
 
 const BucketSourceSchema = z
 	.object({
@@ -53,23 +53,22 @@ export const DryRunResponseSchema = z
 	.meta({ id: "DryRunResponse" });
 export type DryRunResponse = z.infer<typeof DryRunResponseSchema>;
 
-export const EncodeRequestSchema = z
-	.object({
-		source: EncodeSourceSchema.describe("Media to encode"),
-		preset: PresetNameSchema.describe("Name of the preset to encode with"),
-		postProcess: PostProcessRequestSchema.optional().describe("Post-processing to run on the asset"),
-		callbackUrl: CallbackUrlSchema.optional().describe("URL notified when the request finishes"),
-		externalId: z.string().min(1).max(255).optional().describe("Caller-side identifier for the asset"),
-		requestId: z.uuid().optional().describe("Client idempotency key, stored as clientRequestId"),
-		analyze: AnalyzeModeSchema.default("async").describe("Whether source analysis runs inline or queued"),
-		sourceMetadata: SourceMetadataSchema.optional().describe(
-			"Dry run only: plan against this metadata instead of probing the source"
-		)
-	})
-	.meta({ id: "EncodeRequest" });
+const EncodeRequestFieldsSchema = z.object({
+	source: EncodeSourceSchema.describe("Media to encode"),
+	preset: PresetNameSchema.describe("Name of the preset to encode with"),
+	postProcess: PostProcessRequestSchema.optional().describe("Post-processing to run on the asset"),
+	externalId: z.string().min(1).max(255).optional().describe("Caller-side identifier for the asset"),
+	requestId: z.uuid().optional().describe("Client idempotency key, stored as clientRequestId"),
+	analyze: AnalyzeModeSchema.default("async").describe("Whether source analysis runs inline or queued"),
+	sourceMetadata: SourceMetadataSchema.optional().describe(
+		"Dry run only: plan against this metadata instead of probing the source"
+	)
+});
+
+export const EncodeRequestSchema = EncodeRequestFieldsSchema.and(DestinationInputSchema).meta({ id: "EncodeRequest" });
 export type EncodeRequest = z.infer<typeof EncodeRequestSchema>;
 
-export const EncodeOptionsSchema = EncodeRequestSchema.omit({ source: true });
+export const EncodeOptionsSchema = EncodeRequestFieldsSchema.omit({ source: true }).and(DestinationInputSchema);
 export type EncodeOptions = z.infer<typeof EncodeOptionsSchema>;
 
 export const EncodeQuerySchema = z

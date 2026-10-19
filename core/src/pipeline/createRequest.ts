@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import {
 	ConflictError,
 	type AnalyzeMode,
+	type Destination,
 	type Preset,
 	type PostProcessRequest,
 	type RequestMode
@@ -21,7 +22,7 @@ export class RequestIdConflictError extends ConflictError {
 interface CreateRequestBase {
 	requestId?: string;
 	asset: MediaAsset;
-	callbackUrl?: string;
+	destination?: Destination;
 	analyze: AnalyzeMode;
 }
 
@@ -80,7 +81,7 @@ function buildRequestDoc(_id: string, clientRequestId: string, input: CreateRequ
 		assetVersion: mode === "reencode" ? asset.version + 1 : asset.version,
 		pendingItems: [],
 		status: canLaunch(mode, asset) ? "IN_PROGRESS" : "ANALYZING",
-		...(input.callbackUrl !== undefined && { callbackUrl: input.callbackUrl }),
+		...(input.destination !== undefined && { destination: input.destination }),
 		createdAt: now
 	};
 }

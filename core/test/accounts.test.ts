@@ -6,6 +6,7 @@ import { UnsafeUrlError } from "../src/ssrf";
 import { resetDb, startMongo, stopMongo } from "./helpers/mongo";
 
 const UNKNOWN_ID = "00000000-0000-0000-0000-000000000000";
+const BUS_ARN = "arn:aws:events:us-east-2:123456789012:event-bus/helios";
 const baseInput = { slug: "acme", name: "Acme", sourceBuckets: ["bucket-a"], features: { peopleAttributes: false } };
 
 beforeAll(() => startMongo());
@@ -31,14 +32,30 @@ describe("createAccount", () => {
 		await expect(createAccount(baseInput)).rejects.toThrow(ConflictError);
 	});
 
-	it("throws and inserts nothing when the callbackUrl is unsafe", async () => {
-		await expect(
-			createAccount({ ...baseInput, slug: "blocked", callbackUrl: "http://10.0.0.1/hook" })
-		).rejects.toMatchObject({ code: "unsafe_url", httpStatus: 400 });
-		await expect(
-			createAccount({ ...baseInput, slug: "blocked", callbackUrl: "http://10.0.0.1/hook" })
-		).rejects.toBeInstanceOf(UnsafeUrlError);
+	it("throws and inserts nothing when the webhook destination is private", async () => {
+		const destination = { type: "webhook" as const, url: "http://10.0.0.1/hook" };
+
+		await expect(createAccount({ ...baseInput, slug: "blocked", destination })).rejects.toMatchObject({
+			code: "unsafe_url",
+			httpStatus: 400
+		});
+		await expect(createAccount({ ...baseInput, slug: "blocked", destination })).rejects.toBeInstanceOf(UnsafeUrlError);
 		expect(await accounts().countDocuments({ slug: "blocked" })).toBe(0);
+	});
+
+	it("stores an eventbridge destination whose ARN is a bus ARN", async () => {
+		const destination = { type: "eventbridge" as const, eventBusArn: BUS_ARN };
+
+		const account = await createAccount({ ...baseInput, destination });
+
+		expect((await getAccount(account._id)).destination).toEqual(destination);
+	});
+
+	it("throws and inserts nothing when the eventbridge ARN is not a bus ARN", async () => {
+		const destination = { type: "eventbridge" as const, eventBusArn: "arn:aws:sqs:us-east-2:123456789012:queue" };
+
+		await expect(createAccount({ ...baseInput, slug: "bad-arn", destination })).rejects.toThrow(ValidationError);
+		expect(await accounts().countDocuments({ slug: "bad-arn" })).toBe(0);
 	});
 
 	it("rejects the media bucket in sourceBuckets and inserts nothing", async () => {
@@ -79,28 +96,49 @@ describe("updateAccount", () => {
 		expect((await getAccount(account._id)).sourceBuckets).toEqual(["bucket-a"]);
 	});
 
-	it("sets a new callbackUrl after checking it is public", async () => {
+	it("sets a new webhook destination after checking it is public", async () => {
 		const account = await createAccount(baseInput);
 
-		const updated = await updateAccount(account._id, { callbackUrl: "https://93.184.216.34/hook" });
+		const updated = await updateAccount(account._id, {
+			destination: { type: "webhook", url: "https://93.184.216.34/hook" }
+		});
 
-		expect(updated.callbackUrl).toBe("https://93.184.216.34/hook");
+		expect(updated.destination).toEqual({ type: "webhook", url: "https://93.184.216.34/hook" });
 	});
 
-	it("clears callbackUrl when null is given", async () => {
-		const account = await createAccount({ ...baseInput, callbackUrl: "https://93.184.216.34/hook" });
+	it("sets an eventbridge destination", async () => {
+		const account = await createAccount(baseInput);
 
-		const updated = await updateAccount(account._id, { callbackUrl: null });
+		const updated = await updateAccount(account._id, { destination: { type: "eventbridge", eventBusArn: BUS_ARN } });
 
-		expect(updated.callbackUrl).toBeUndefined();
-		expect((await getAccount(account._id)).callbackUrl).toBeUndefined();
+		expect(updated.destination).toEqual({ type: "eventbridge", eventBusArn: BUS_ARN });
 	});
 
-	it("leaves the stored callbackUrl unchanged when assertPublicUrl rejects the new one", async () => {
-		const account = await createAccount({ ...baseInput, callbackUrl: "https://93.184.216.34/hook" });
+	it("clears the destination when null is given", async () => {
+		const account = await createAccount({
+			...baseInput,
+			destination: { type: "webhook", url: "https://93.184.216.34/hook" }
+		});
 
-		await expect(updateAccount(account._id, { callbackUrl: "http://10.0.0.1/hook" })).rejects.toThrow(UnsafeUrlError);
-		expect((await getAccount(account._id)).callbackUrl).toBe("https://93.184.216.34/hook");
+		const updated = await updateAccount(account._id, { destination: null });
+
+		expect(updated.destination).toBeUndefined();
+		expect((await getAccount(account._id)).destination).toBeUndefined();
+	});
+
+	it("leaves the stored destination unchanged when assertPublicUrl rejects the new one", async () => {
+		const account = await createAccount({
+			...baseInput,
+			destination: { type: "webhook", url: "https://93.184.216.34/hook" }
+		});
+
+		await expect(
+			updateAccount(account._id, { destination: { type: "webhook", url: "http://10.0.0.1/hook" } })
+		).rejects.toThrow(UnsafeUrlError);
+		expect((await getAccount(account._id)).destination).toEqual({
+			type: "webhook",
+			url: "https://93.184.216.34/hook"
+		});
 	});
 });
 

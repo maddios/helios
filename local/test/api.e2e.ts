@@ -112,7 +112,7 @@ async function uploadSource(name: string): Promise<string> {
 
 beforeAll(async () => {
 	generateFixtures();
-	await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket]);
+	await bootstrap(local.e2eQueuePrefix, [local.mediaBucket, local.sourceBucket], local.worker.visibilityExtensionSec);
 	await initDb(local.mongoUri);
 	await ensureIndexes();
 	await seedSystemPreset(genericPreset);

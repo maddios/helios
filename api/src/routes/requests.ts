@@ -1,10 +1,9 @@
 import { CallbackDeliveryListResponseSchema, RedeliverResponseSchema, RequestViewSchema } from "@helios/contracts";
-import { cancelRequest, listDeliveries, loadAccountRequest, redeliver } from "@helios/core";
+import { cancelRequest, listDeliveries, loadAccountRequest, redeliver, toRequestView } from "@helios/core";
 import { apiConfig } from "../config";
 import { endpoint } from "../http/endpoint";
 import { reply } from "../http/reply";
 import { toCallbackView } from "../views/callback";
-import { toRequestView } from "../views/request";
 import { IdParams } from "./params";
 
 export const requestRoutes = [
@@ -35,6 +34,7 @@ export const requestRoutes = [
 		path: "/requests/{id}/callbacks",
 		summary: "List callback deliveries of a request",
 		auth: "account",
+		tags: ["Webhooks"],
 		input: { params: IdParams },
 		responses: { 200: { description: "Callback deliveries", schema: CallbackDeliveryListResponseSchema } },
 		errors: [404],
@@ -49,6 +49,7 @@ export const requestRoutes = [
 		path: "/requests/{id}/callbacks/redeliver",
 		summary: "Redeliver the final callback of a finished request",
 		auth: "account",
+		tags: ["Webhooks"],
 		input: { params: IdParams },
 		responses: { 202: { description: "Redelivery queued", schema: RedeliverResponseSchema } },
 		errors: [404, 409, 429],

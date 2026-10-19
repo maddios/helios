@@ -1,5 +1,6 @@
 import type { RequestItemView, RequestView } from "@helios/contracts";
-import { isTerminal, loadItems, type PipelineItem, type PipelineRequest } from "@helios/core";
+import type { PipelineItem, PipelineRequest } from "../models";
+import { isTerminal, loadItems } from "../pipeline";
 
 export async function toRequestView(request: PipelineRequest): Promise<RequestView> {
 	const items = (await loadItems(request._id)).map(toItemView);
@@ -20,7 +21,7 @@ export async function toRequestView(request: PipelineRequest): Promise<RequestVi
 	};
 }
 
-function toItemView(item: PipelineItem): RequestItemView {
+export function toItemView(item: PipelineItem): RequestItemView {
 	return {
 		id: item._id,
 		key: item.key,

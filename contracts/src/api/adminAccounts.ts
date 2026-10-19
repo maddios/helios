@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { CallbackUrlSchema } from "./common";
+import { DestinationInputSchema, DestinationPatchInputSchema, DestinationSchema } from "../destinations";
 
 export const AccountFeaturesSchema = z.object({
 	peopleAttributes: z.boolean().describe("Whether people attribute extraction is enabled")
@@ -12,7 +12,13 @@ export const AccountViewSchema = z
 		slug: z.string().describe("URL-safe account slug"),
 		name: z.string().describe("Display name of the account"),
 		sourceBuckets: z.array(z.string()).describe("Buckets the account may encode sources from"),
-		callbackUrl: z.string().optional().describe("URL that receives request callbacks"),
+		callbackUrl: z
+			.string()
+			.optional()
+			.describe("URL that receives request callbacks; set only for a webhook destination"),
+		destination: DestinationSchema.optional().describe(
+			"Default delivery destination; the webhook secret is never shown"
+		),
 		features: AccountFeaturesSchema.describe("Feature flags enabled for the account"),
 		createdAt: z.iso.datetime().describe("When the account was created")
 	})
@@ -27,11 +33,11 @@ export const CreateAccountRequestSchema = z
 			.describe("URL-safe account slug"),
 		name: z.string().min(1).describe("Display name of the account"),
 		sourceBuckets: z.array(z.string()).default([]).describe("Buckets the account may encode sources from"),
-		callbackUrl: CallbackUrlSchema.optional().describe("URL that receives request callbacks"),
 		features: AccountFeaturesSchema.partial()
 			.default({ peopleAttributes: false })
 			.describe("Feature flags to enable for the account")
 	})
+	.and(DestinationInputSchema)
 	.meta({ id: "CreateAccountRequest" });
 export type CreateAccountRequest = z.infer<typeof CreateAccountRequestSchema>;
 
@@ -44,11 +50,9 @@ export const UpdateAccountRequestSchema = z
 	.object({
 		name: z.string().min(1).optional().describe("New display name"),
 		sourceBuckets: z.array(z.string()).optional().describe("Buckets the account may encode sources from"),
-		callbackUrl: CallbackUrlSchema.nullable()
-			.optional()
-			.describe("URL that receives request callbacks; null clears it"),
 		features: AccountFeaturesSchema.partial().optional().describe("Feature flags to update")
 	})
+	.and(DestinationPatchInputSchema)
 	.meta({ id: "UpdateAccountRequest" });
 export type UpdateAccountRequest = z.infer<typeof UpdateAccountRequestSchema>;
 

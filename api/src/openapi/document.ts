@@ -7,6 +7,7 @@ import {
 import { ErrorBodySchema } from "@helios/contracts";
 import type { ZodObject, ZodType } from "zod";
 import type { AnyEndpoint } from "../http/endpoint";
+import { eventbridgeGuide, webhooksGuide } from "./guides";
 
 const SECURITY_SCHEME: Record<"account" | "admin", string> = { account: "accountKey", admin: "adminKey" };
 
@@ -29,6 +30,7 @@ const AUTHENTICATED_PATHS: RouteConfig[] = [
 		method: "get",
 		path: "/openapi.json",
 		summary: "OpenAPI document",
+		tags: ["Health"],
 		security: ANY_KEY_SECURITY,
 		responses: {
 			200: { description: "OpenAPI 3.0.3 document" },
@@ -39,6 +41,7 @@ const AUTHENTICATED_PATHS: RouteConfig[] = [
 		method: "get",
 		path: "/docs",
 		summary: "Interactive API reference (Swagger UI)",
+		tags: ["Health"],
 		security: ANY_KEY_SECURITY,
 		responses: {
 			200: { description: "Swagger UI" },
@@ -67,7 +70,11 @@ export function buildOpenApiDocument(endpoints: AnyEndpoint[]) {
 	}
 	return new OpenApiGeneratorV3(registry.definitions).generateDocument({
 		openapi: "3.0.3",
-		info: { title: "Helios API", version: "0.1.0", description: "Encoding and post-processing API" }
+		info: { title: "Helios API", version: "0.1.0", description: "Encoding and post-processing API" },
+		tags: [
+			{ name: "Destinations", description: eventbridgeGuide },
+			{ name: "Webhooks", description: webhooksGuide }
+		]
 	});
 }
 
@@ -78,6 +85,7 @@ function routeOf(spec: AnyEndpoint): RouteConfig {
 		path: spec.path,
 		summary: spec.summary,
 		security: spec.auth === "none" ? [] : [{ [SECURITY_SCHEME[spec.auth]]: [] }],
+		tags: spec.tags,
 		request: {
 			...(input?.params !== undefined && { params: input.params as ZodObject }),
 			...(input?.query !== undefined && { query: input.query as ZodObject }),

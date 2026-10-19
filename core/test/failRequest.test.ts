@@ -32,7 +32,7 @@ describe("failRequest", () => {
 			error: { code: "unprocessable_source", message: "Source is not media" },
 			completedAt: expect.any(Date)
 		});
-		expect(sentCallbacks()).toEqual([{ type: "request", requestId: request._id }]);
+		expect(sentCallbacks()).toEqual([{ type: "request", requestId: request._id, sequence: 1 }]);
 		expect(totalSendCalls()).toBe(0);
 	});
 

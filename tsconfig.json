@@ -10,6 +10,8 @@
 		"worker/test",
 		"api/src",
 		"api/test",
+		"functions/src",
+		"functions/test",
 		"local"
 	]
 }

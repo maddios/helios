@@ -29,6 +29,7 @@ export const JobReportSchema = z.object({
 	usage: UsageSummarySchema,
 	resourceUnits: ResourceUnitsSchema,
 	unitsRecordedItems: z.array(z.string()),
+	completedAt: z.date().optional(),
 	createdAt: z.date()
 });
 export type JobReport = z.infer<typeof JobReportSchema>;

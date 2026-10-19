@@ -103,7 +103,7 @@ describe("analyzeRequest", () => {
 			error: { code: "unprocessable_source", message: "Source has no video or image stream" }
 		});
 		expect(await mediaAssets().findOne({ _id: unanalyzedAsset._id })).not.toHaveProperty("sourceMetadata");
-		expect(sentCallbacks()).toEqual([{ type: "request", requestId }]);
+		expect(sentCallbacks()).toEqual([{ type: "request", requestId, sequence: 1 }]);
 	});
 
 	it("ingests a url source before probing it", async () => {

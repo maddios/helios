@@ -5,7 +5,7 @@ import { createAsset, toAssetSource } from "./sourceAsset";
 import { createRequest, type CreateRequestResult } from "../pipeline";
 import { requests, type Account, type MediaAsset, type PipelineRequest } from "../models";
 import { resolvePreset } from "../presetAdmin";
-import { assertPublicUrl } from "../ssrf";
+import { assertDestination } from "../destinations";
 
 export async function createEncode(account: Account, input: EncodeRequest): Promise<CreateRequestResult> {
 	if (input.sourceMetadata !== undefined) {
@@ -14,8 +14,8 @@ export async function createEncode(account: Account, input: EncodeRequest): Prom
 	if (input.analyze === "sync" && "url" in input.source) {
 		throw new ValidationError('analyze "sync" cannot be used with a url source');
 	}
-	if (input.callbackUrl !== undefined) {
-		await assertPublicUrl(input.callbackUrl);
+	if (input.destination !== undefined) {
+		await assertDestination(input.destination);
 	}
 	const preset = toPreset(await resolvePreset(account._id, input.preset));
 	const asset = await encodeAsset(account, input);
@@ -25,7 +25,7 @@ export async function createEncode(account: Account, input: EncodeRequest): Prom
 		mode: "encode",
 		preset,
 		...(input.postProcess !== undefined && { postProcess: input.postProcess }),
-		...(input.callbackUrl !== undefined && { callbackUrl: input.callbackUrl }),
+		...(input.destination !== undefined && { destination: input.destination }),
 		analyze: input.analyze
 	});
 	return { ...result, request: await analyzeIfSync(result.request, input.analyze) };

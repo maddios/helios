@@ -10,4 +10,6 @@ export * from "./resourceUnits";
 export * from "./transcript";
 export * from "./scenes";
 export * from "./errors";
+export * from "./webhooks";
 export * from "./api";
+export * from "./destinations";

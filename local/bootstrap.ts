@@ -1,21 +1,45 @@
 import { CreateBucketCommand, HeadBucketCommand, S3Client, type BucketLocationConstraint } from "@aws-sdk/client-s3";
 import {
+	CreateEventBusCommand,
+	DescribeEventBusCommand,
+	EventBridgeClient,
+	PutRuleCommand,
+	PutTargetsCommand
+} from "@aws-sdk/client-eventbridge";
+import {
 	CreateQueueCommand,
 	GetQueueAttributesCommand,
+	GetQueueUrlCommand,
 	SetQueueAttributesCommand,
 	SQSClient
 } from "@aws-sdk/client-sqs";
 import { dlqName, fullQueueName, isFifoName, queueTopology } from "@helios/core";
-import { applyLocalEnv, loadLocalConfig } from "./loadConfig";
+import { applyLocalEnv, loadLocalConfig, type LocalConfig } from "./loadConfig";
 
 export interface BootstrapResult {
 	created: string[];
 	updated: string[];
 }
 
-export async function bootstrap(prefix: string, buckets: string[]): Promise<BootstrapResult> {
+const EVENT_BUS_NAME = "helios-local-customer-bus";
+const EVENT_RULE_NAME = "helios-local-capture";
+const CAPTURE_QUEUE = "eventbridge-capture";
+
+export function localEventBusArn(local: LocalConfig): string {
+	return `arn:aws:events:${local.awsRegion}:${local.localBusAccountId}:event-bus/${EVENT_BUS_NAME}`;
+}
+
+export function captureQueueName(local: LocalConfig): string {
+	return fullQueueName(local.queuePrefix, CAPTURE_QUEUE);
+}
+
+export async function bootstrap(
+	prefix: string,
+	buckets: string[],
+	visibilityTimeoutSec: number
+): Promise<BootstrapResult> {
 	const local = loadLocalConfig();
-	const visibilityTimeout = String(local.worker.visibilityExtensionSec);
+	const visibilityTimeout = String(visibilityTimeoutSec);
 	const sqs = new SQSClient({ region: local.awsRegion, endpoint: local.awsEndpoint });
 	const s3 = new S3Client({ region: local.awsRegion, endpoint: local.awsEndpoint, forcePathStyle: true });
 	const result: BootstrapResult = { created: [], updated: [] };
@@ -59,11 +83,72 @@ export async function bootstrap(prefix: string, buckets: string[]): Promise<Boot
 			result.created.push(bucket);
 		}
 	}
+	const eventbridge = new EventBridgeClient({ region: local.awsRegion, endpoint: local.awsEndpoint });
+	await ensureEventCapture(eventbridge, sqs, local, result, visibilityTimeout);
 	return result;
 }
 
 function redrivePolicy(deadLetterTargetArn: string, maxReceiveCount: number): string {
 	return JSON.stringify({ deadLetterTargetArn, maxReceiveCount });
+}
+
+async function ensureEventCapture(
+	eventbridge: EventBridgeClient,
+	sqs: SQSClient,
+	local: LocalConfig,
+	result: BootstrapResult,
+	visibilityTimeout: string
+): Promise<void> {
+	const queueName = captureQueueName(local);
+	const queueArn = await ensureQueue(sqs, queueName, undefined, result, visibilityTimeout);
+	await ensureEventBus(eventbridge, result);
+	const { RuleArn } = await eventbridge.send(
+		new PutRuleCommand({
+			Name: EVENT_RULE_NAME,
+			EventBusName: EVENT_BUS_NAME,
+			EventPattern: JSON.stringify({ source: [{ prefix: "helios." }] })
+		})
+	);
+	if (RuleArn === undefined) {
+		throw new Error(`No ARN returned for rule ${EVENT_RULE_NAME}`);
+	}
+	result.updated.push(EVENT_RULE_NAME);
+	await eventbridge.send(
+		new PutTargetsCommand({
+			Rule: EVENT_RULE_NAME,
+			EventBusName: EVENT_BUS_NAME,
+			Targets: [{ Id: "capture", Arn: queueArn }]
+		})
+	);
+	const { QueueUrl } = await sqs.send(new GetQueueUrlCommand({ QueueName: queueName }));
+	await sqs.send(new SetQueueAttributesCommand({ QueueUrl, Attributes: { Policy: capturePolicy(queueArn, RuleArn) } }));
+}
+
+async function ensureEventBus(eventbridge: EventBridgeClient, result: BootstrapResult): Promise<void> {
+	try {
+		await eventbridge.send(new DescribeEventBusCommand({ Name: EVENT_BUS_NAME }));
+	} catch (err) {
+		if (!(err instanceof Error) || err.name !== "ResourceNotFoundException") {
+			throw err;
+		}
+		await eventbridge.send(new CreateEventBusCommand({ Name: EVENT_BUS_NAME }));
+		result.created.push(EVENT_BUS_NAME);
+	}
+}
+
+function capturePolicy(queueArn: string, ruleArn: string): string {
+	return JSON.stringify({
+		Version: "2012-10-17",
+		Statement: [
+			{
+				Effect: "Allow",
+				Principal: { Service: "events.amazonaws.com" },
+				Action: "sqs:SendMessage",
+				Resource: queueArn,
+				Condition: { ArnEquals: { "aws:SourceArn": ruleArn } }
+			}
+		]
+	});
 }
 
 async function ensureQueue(
@@ -119,7 +204,7 @@ async function ensureBucket(s3: S3Client, bucket: string, region: string): Promi
 if (require.main === module) {
 	const local = loadLocalConfig();
 	applyLocalEnv(local, { e2e: false });
-	bootstrap(local.queuePrefix, [local.mediaBucket, local.sourceBucket])
+	bootstrap(local.queuePrefix, [local.mediaBucket, local.sourceBucket], local.worker.visibilityExtensionSec)
 		.then((result) => {
 			for (const name of result.created) {
 				console.log(`created ${name}`);

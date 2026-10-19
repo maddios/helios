@@ -7,8 +7,10 @@ const BASE_BACKOFF_MS = 500;
 const NETWORK_CODE = /^(ECONNRESET|ETIMEDOUT|UND_ERR_[A-Z_]+)$/;
 
 const ErrorBodySchema = z.object({
-	error: z.object({ code: z.string().nullish() }).optional()
+	error: z.object({ code: z.string().nullish(), type: z.string().nullish() }).optional()
 });
+
+const QUOTA_ERRORS = new Set(["insufficient_quota", "credit_balance_exhausted", "billing_hard_limit_reached"]);
 
 export interface OpenAIRequest {
 	path: string;
@@ -34,9 +36,12 @@ export async function openaiRequest(request: OpenAIRequest): Promise<unknown> {
 }
 
 async function postOnce({ path, body, timeoutSec, signal }: OpenAIRequest): Promise<unknown> {
-	const { OPENAI_BASE_URL, OPENAI_API_KEY } = aiConfig();
+	const { OPENAI_BASE_URL, OPENAI_API_KEY, OPENAI_ORG } = aiConfig();
 	const json = !(body instanceof FormData);
 	const headers: Record<string, string> = { Authorization: `Bearer ${OPENAI_API_KEY}` };
+	if (OPENAI_ORG !== undefined) {
+		headers["OpenAI-Organization"] = OPENAI_ORG;
+	}
 	if (json) {
 		headers["Content-Type"] = "application/json";
 	}
@@ -75,9 +80,11 @@ async function send(url: string, init: RequestInit, signal: AbortSignal): Promis
 
 async function toApiError(response: Response): Promise<OpenAIError> {
 	const parsed = ErrorBodySchema.safeParse(await response.json().catch(() => undefined));
+	const error = parsed.data?.error;
+	const quotaExhausted = QUOTA_ERRORS.has(error?.code ?? "") || QUOTA_ERRORS.has(error?.type ?? "");
 	return new OpenAIError({
 		status: response.status,
-		code: parsed.data?.error?.code ?? "unknown",
+		code: quotaExhausted ? "insufficient_quota" : (error?.code ?? "unknown"),
 		retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after"), Date.now())
 	});
 }
@@ -106,6 +113,7 @@ function fieldOf(value: unknown, field: string): unknown {
 function isRetryable(err: unknown): err is OpenAIError {
 	return (
 		err instanceof OpenAIError &&
+		err.code !== "insufficient_quota" &&
 		(err.code === "timeout" || err.code === "network" || err.status === 429 || (err.status ?? 0) >= 500)
 	);
 }

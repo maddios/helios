@@ -12,6 +12,7 @@ export interface StubReply {
 export interface StubRequest {
 	url: string;
 	authorization: string;
+	organization: string | undefined;
 	contentType: string;
 	body: Buffer;
 }
@@ -41,6 +42,7 @@ export async function startOpenAIStub(replies: StubReply[]): Promise<OpenAIStub>
 			requests.push({
 				url: req.url ?? "",
 				authorization: req.headers.authorization ?? "",
+				organization: req.headers["openai-organization"] as string | undefined,
 				contentType: req.headers["content-type"] ?? "",
 				body: Buffer.concat(chunks)
 			});

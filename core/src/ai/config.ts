@@ -3,6 +3,7 @@ import { z } from "zod";
 const schema = z.object({
 	OPENAI_BASE_URL: z.url().transform((url) => url.replace(/\/+$/, "")),
 	OPENAI_API_KEY: z.string().min(1),
+	OPENAI_ORG: z.string().min(1).optional(),
 	OPENAI_TIMEOUT_SEC: z.coerce.number().int().positive(),
 	OPENAI_TRANSCRIBE_TIMEOUT_SEC: z.coerce.number().int().positive(),
 	OPENAI_MAX_ATTEMPTS: z.coerce.number().int().positive(),

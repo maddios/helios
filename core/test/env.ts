@@ -11,6 +11,7 @@ process.env.CDN_BASE_URL = "https://cdn.test.invalid/helios-test-media";
 process.env.CDN_MODE = "recording";
 process.env.UPLOAD_URL_EXPIRY_SEC = "21600";
 process.env.MAX_UPLOAD_BYTES = String(10 * 1024 ** 3);
+process.env.UPLOAD_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:3000";
 process.env.SSRF_ALLOWED_HOSTS = "";
 process.env.INGEST_TIMEOUT_SEC = "60";
 process.env.SCALER_NOTIFY = "none";

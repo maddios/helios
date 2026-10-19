@@ -2,6 +2,7 @@ import {
 	AbortMultipartUploadCommand,
 	CompleteMultipartUploadCommand,
 	CreateMultipartUploadCommand,
+	ListPartsCommand,
 	S3Client
 } from "@aws-sdk/client-s3";
 import { ForbiddenError, ValidationError } from "@helios/contracts";
@@ -15,7 +16,9 @@ import {
 	createMultipartUpload,
 	createPresignedUpload,
 	createRawFileUpload,
+	listMultipartParts,
 	partSizeFor,
+	signMultipartParts,
 	sanitizeFilename
 } from "../src/uploads";
 
@@ -184,6 +187,41 @@ describe("uploads", () => {
 				ForbiddenError
 			);
 			expect(s3Mock.commandCalls(AbortMultipartUploadCommand)).toHaveLength(0);
+		});
+	});
+
+	describe("signMultipartParts", () => {
+		it("presigns one URL per requested part with the upload id and part numbers", async () => {
+			const response = await signMultipartParts("acme", { uploadId: "up-1", uploadKey: OWN_KEY, partNumbers: [3, 1] });
+
+			expect(response.parts.map((part) => part.partNumber)).toEqual([3, 1]);
+			expect(response.parts[0]?.url).toContain("partNumber=3");
+			expect(response.parts[0]?.url).toContain("uploadId=up-1");
+			expect(response.parts[0]?.url).toContain("X-Amz-Expires=21600");
+			expect(response.expiresAt).toEqual(expect.any(String));
+		});
+
+		it("rejects an upload key owned by another account without presigning", async () => {
+			await expect(
+				signMultipartParts("acme", { uploadId: "up-1", uploadKey: FOREIGN_KEY, partNumbers: [1] })
+			).rejects.toThrow(ForbiddenError);
+		});
+	});
+
+	describe("listMultipartParts", () => {
+		it("returns the uploaded parts of an owned upload", async () => {
+			s3Mock.on(ListPartsCommand).resolves({ Parts: [{ PartNumber: 1, ETag: '"etag-1"', Size: 5242880 }] });
+
+			await expect(listMultipartParts("acme", { uploadId: "up-1", uploadKey: OWN_KEY })).resolves.toEqual({
+				parts: [{ partNumber: 1, etag: '"etag-1"', sizeBytes: 5242880 }]
+			});
+		});
+
+		it("rejects an upload key owned by another account without listing", async () => {
+			await expect(listMultipartParts("acme", { uploadId: "up-1", uploadKey: FOREIGN_KEY })).rejects.toThrow(
+				ForbiddenError
+			);
+			expect(s3Mock.commandCalls(ListPartsCommand)).toHaveLength(0);
 		});
 	});
 

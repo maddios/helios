@@ -415,7 +415,7 @@ const event = helios.webhooks.verify(rawBody, signatureHeader); // typed discrim
 
 | Namespace     | Methods                                                                                                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uploads`     | Manual multipart: `presign`, `createMultipart`/`completeMultipart`/`abortMultipart` (every part URL comes from `createMultipart`; there is no `signParts`). `uploadAndEncode` returns `{ uploadKey, request }` and handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
+| `uploads`     | Manual multipart: `presign`, `createMultipart`/`signParts`/`listParts`/`completeMultipart`/`abortMultipart` (`signParts` and `listParts` added in step 8b). `uploadAndEncode` returns `{ uploadKey, request }` and handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
 | `encodes`     | `create` (`dryRun`, `requestId` idempotency, `postProcess`), `reencode` (`refreshPreset`)                                                                  |
 | `requests`    | `get`, `cancel`, `wait`, `callbacks.list`/`redeliver`                                                                                                      |
 | `assets`      | `get`, `delete` (purge), `setActiveStill`, `postProcess`                                                                                                   |
@@ -613,7 +613,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 | Area     | Routes                                                                                                                                                                                                                                                                                                     |
 | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Encoding | `POST /encode` (`?dryRun=true` with an S3 or upload source probes without writing, or the body supplies `sourceMetadata`), `POST /assets/:id/re-encode` (`refreshPreset`), `POST /assets/:id/post-process`                                                                                                 |
-| Uploads  | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode, status rules below), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
+| Uploads  | `POST /uploads/presigned` (single PUT), `POST /uploads/multipart`, `POST /uploads/multipart/:uploadId/parts` (step 8b: presign some parts), `GET /uploads/multipart/:uploadId/parts?uploadKey=` (step 8b: stored parts), `POST /uploads/multipart/:uploadId/complete` (optional `encode` options = upload-and-encode, status rules below), `DELETE /uploads/multipart/:uploadId`; `POST /files` (raw non-media files under `{slug}/files/…`, icarus replacement) |
 | Assets   | `GET /assets` (by `externalId`, cursor), `GET /assets/:id` (outputs with CDN URLs `CDN_BASE_URL/{key}?v={version}`, `postProcess` status, `activeStill`), `PATCH /assets/:id/active-still`, `DELETE /assets/:id` (202, purge), `GET /assets/:id/transcripts`, `GET /assets/:id/scenes`                     |
 | Requests | `GET /requests/:id` (items + progress), `DELETE /requests/:id` (cancel; 409 for purge requests), `GET /requests/:id/callbacks`, `POST /requests/:id/callbacks/redeliver` (429 `redeliver_cooldown` inside `REDELIVER_COOLDOWN_SEC`)                                                                        |
 | Presets  | per "Preset management API" (account presets; system presets are read and clone only)                                                                                                                                                                                                                      |
@@ -1061,6 +1061,48 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - `.github/workflows/sdk-publish.yml` publishes on `sdk-v*` tags. `.github/workflows/ci.yml` runs tsc, jest, depcheck, prettier and the SDK checks on pull requests and pushes to `main`.
 - Gaps found while documenting, not changed: `images.url` cannot express fill crop or gravity, which the server grammar supports. PLAN's SDK design lists only `w,h,q,f,pad,bg`, so the SDK follows that surface.
 
+## Step 8b: browser multipart uploads (icarus/Evaporate parity, added and built 2026-10-19)
+**Flow:**
+1. The customer backend calls `helios.uploads.createMultipart(...)` (secret key) and passes `{ uploadId, uploadKey, partSizeBytes, parts }` to the browser.
+2. The browser uploads the parts directly to S3 with `@partnrup/helios-sdk/browser`.
+3. The browser returns `[{ partNumber, etag }]` to the backend.
+4. The backend calls `completeMultipart` (optionally with `encode`), or stores `uploadKey` and encodes later (`source: { uploadKey }`).
+
+**CORS** on the media bucket (infra + local bootstrap):
+- Methods `PUT`, `GET` and `HEAD`, all headers allowed, `ExposeHeaders: ETag`, `MaxAgeSeconds` 3000.
+- `AllowedOrigins` come from per-stage config (`UPLOAD_ALLOWED_ORIGINS`; locally the dev app origins). Bucket CORS is bucket-wide; the presigned URLs authorise each PUT.
+
+**Re-sign and resume** (icarus `sign_auth` parity):
+- `POST /uploads/multipart/:uploadId/parts` `{ uploadKey, partNumbers }` returns fresh presigned part URLs. It rejects keys that aren't owned and part numbers outside the planned range.
+- `GET /uploads/multipart/:uploadId/parts?uploadKey=` lists the uploaded parts (S3 ListParts → `[{ partNumber, etag, sizeBytes }]`), so the browser can resume after a reload or URL expiry.
+- SDK: `uploads.signParts`, `uploads.listParts`.
+
+**Browser entry `@partnrup/helios-sdk/browser`:**
+- It is secret-free and zero-dependency. It contains no client, no API key and no zod.
+- `uploadParts(upload, file: Blob, { concurrency, onProgress, signal, signParts?, uploadedParts? })` slices the Blob by `partSizeBytes`.
+- Each part is PUT with **XHR**, because fetch has no upload progress in browsers, and its `ETag` is read.
+- Failed parts are retried with backoff. On a 403 (expired URL) it calls `signParts` (a callback into the app's backend) for fresh URLs.
+- Parts listed in `uploadedParts` (from `listParts`) are skipped, which is how resume works.
+- It returns `[{ partNumber, etag }]` sorted.
+- A single-PUT helper `uploadSingle(presigned, file, ...)` covers small files.
+
+**Built (2026-10-19):**
+- Core: `UPLOAD_ALLOWED_ORIGINS` is required (comma list of `scheme://host[:port]` origins, validated, no paths or wildcards). Local config lists `http://localhost:5173` and `http://localhost:3000`. `core/src/uploads/parts.ts` adds `signMultipartParts` and `listMultipartParts`. `ObjectStore.listParts` pages through S3 ListParts.
+- API: `POST /uploads/multipart/{uploadId}/parts` (body `{ uploadKey, partNumbers }`, unique numbers 1-10000, at most 1000, owned key) and `GET /uploads/multipart/{uploadId}/parts?uploadKey=`. Both have OpenAPI descriptions and examples.
+- CORS: `local/bootstrap.ts` sets bucket CORS on the media bucket. `infra/media.yml` carries the same rules with `UploadAllowedOrigins` as a parameter.
+- SDK: `uploads.signParts(uploadId, uploadKey, partNumbers)` and `uploads.listParts(uploadId, uploadKey)` are idempotent. `@partnrup/helios-sdk/browser` is a separate tsup entry (ES2021, platform browser, no splitting). It imports only its own files, which `depcruise` enforces. Its files: `uploadParts`, `uploadSingle`, `planParts`, `uploadPart`, `putBlob` (XHR), `runWithConcurrency`, `ProgressTracker` and the error classes.
+- Tests: core and API unit tests for the new methods; SDK retry-policy rows, contract map and an in-process integration test; 32 browser unit tests with a fake XHR; `test:dist` type-checks a DOM-only consumer and checks the browser bundle for node references; `test:local:browserUpload` runs the browser uploader against LocalStack with a 12 MiB file in three parts.
+
+**Deviations from the spec above:**
+- `signParts` validates the part numbers and ownership only. The planned part count is not stored, so a number past the planned count is signed and then fails at storage. Storing `partCount` would need a new record; not done.
+- A stored part whose size differs from the plan fails with `invalid_resume` rather than being re-uploaded. The caller is expected to abort and start again.
+- A 403 renews a part's URL once, with no backoff and no retry budget. A second 403 throws `PartUrlExpiredError`.
+- The browser error classes extend `BrowserUploadError`, not `HeliosError`, so the browser entry has no imports from the server code.
+- `ListParts` is read with a loop that follows `IsTruncated`. The SDK paginator looped forever on LocalStack, which returns `NextPartNumberMarker` on the last page.
+- LocalStack does not check presigned signatures or expiry, so the e2e makes the first PUT of one part return a synthetic 403 (test-only `FetchXhr.interceptor`). The renew route and the uploader's 403 path are then real. The unit tests cover the 403 paths with the fake XHR.
+- The media bucket resource is new in `infra/media.yml`, with `DeletionPolicy: Retain`. Step 9 must either import the existing bucket or adopt this stack. It is not wired to a stage yet.
+- `test:dist` now runs `prebuild` (which removes `dist`) before `tsup`, because two tsup configs cannot clean one folder in parallel.
+
 ## Local development & testing
 
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
@@ -1375,3 +1417,12 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Publish access is `restricted` (a private scoped package), in `publishConfig` and in `sdk-publish.yml`. Confirmed by the user (2026-10-19): internal use only. `--provenance` is not used, because npm provenance requires a public repository.
   - `encodes.create` with `dryRun: true` is classified `idempotent`. It has no side effects, so GET-like retries are safe. The retry-policy table is updated.
   - The SDK's image URL builder supports `pad`/`bg` only, per the SDK design. Fill crop and gravity are a known gap, which the docs state.
+- **2026-10-19:** browser multipart upload support: bucket CORS from per-stage `UPLOAD_ALLOWED_ORIGINS`, signParts/listParts routes for re-sign and resume, and a secret-free `@partnrup/helios-sdk/browser` uploader using XHR progress.
+- **2026-10-19 (step 8b built):**
+  - `signParts` checks part numbers and ownership, not the planned part count, because storing the count needs a new record. A number past the count is signed and then fails at storage.
+  - A stored part of the wrong size fails with `invalid_resume`. The uploader does not re-upload it.
+  - A 403 renews a part URL once, with no backoff. A second 403 is `PartUrlExpiredError`.
+  - Browser errors extend `BrowserUploadError`, not `HeliosError`, to keep the browser entry free of server code.
+  - `ListParts` follows `IsTruncated`, because the SDK paginator looped on LocalStack.
+  - LocalStack does not check signatures, so the e2e simulates the first 403 with a test-only interceptor.
+  - `infra/media.yml` owns the media bucket with `DeletionPolicy: Retain`. Step 9 decides how it attaches to the existing bucket.

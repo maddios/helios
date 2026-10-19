@@ -5,6 +5,12 @@ export interface ObjectInfo {
 	etag: string;
 }
 
+export interface UploadedPart {
+	partNumber: number;
+	etag: string;
+	sizeBytes: number;
+}
+
 export interface ObjectStore {
 	presignGet(bucket: string, key: string, expiresSec: number): Promise<string>;
 	headObject(bucket: string, key: string): Promise<boolean>;
@@ -21,4 +27,5 @@ export interface ObjectStore {
 	presignPart(key: string, uploadId: string, partNumber: number, expiresSec: number): Promise<string>;
 	completeMultipartUpload(key: string, uploadId: string, parts: { partNumber: number; etag: string }[]): Promise<void>;
 	abortMultipartUpload(key: string, uploadId: string): Promise<void>;
+	listParts(key: string, uploadId: string): Promise<UploadedPart[]>;
 }

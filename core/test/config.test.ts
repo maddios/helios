@@ -25,6 +25,19 @@ describe("config", () => {
 		});
 	});
 
+	it("parses UPLOAD_ALLOWED_ORIGINS as a list of origins", () => {
+		expect(config().UPLOAD_ALLOWED_ORIGINS).toEqual(["http://localhost:5173", "http://localhost:3000"]);
+	});
+
+	it.each(["", " , ", "https://app.example.com/", "https://*.example.com", "*", "app.example.com"])(
+		"rejects UPLOAD_ALLOWED_ORIGINS of %j",
+		(value) => {
+			process.env.UPLOAD_ALLOWED_ORIGINS = value;
+			resetConfigForTests();
+			expect(() => config()).toThrow(/UPLOAD_ALLOWED_ORIGINS/);
+		}
+	);
+
 	it("requires a CDN_MODE that is cloudfront or recording", () => {
 		process.env.CDN_MODE = "cdn";
 		resetConfigForTests();

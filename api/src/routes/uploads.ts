@@ -5,6 +5,10 @@ import {
 	MultipartCompleteResponseSchema,
 	MultipartCreateRequestSchema,
 	MultipartCreateResponseSchema,
+	MultipartListPartsQuerySchema,
+	MultipartListPartsResponseSchema,
+	MultipartSignPartsRequestSchema,
+	MultipartSignPartsResponseSchema,
 	PresignedUploadRequestSchema,
 	PresignedUploadResponseSchema
 } from "@helios/contracts";
@@ -13,7 +17,9 @@ import {
 	completeMultipartUpload,
 	createEncode,
 	createMultipartUpload,
-	createPresignedUpload
+	createPresignedUpload,
+	listMultipartParts,
+	signMultipartParts
 } from "@helios/core";
 import { endpoint } from "../http/endpoint";
 import { requestReply } from "../http/requestReply";
@@ -66,6 +72,36 @@ export const uploadRoutes = [
 			const result = await createEncode(account, { ...encode, source: { uploadKey } });
 			return requestReply(result, encode.analyze, (request) => ({ uploadKey, request }));
 		}
+	}),
+	endpoint({
+		method: "post",
+		path: "/uploads/multipart/{uploadId}/parts",
+		summary: "Get fresh presigned URLs for some parts of a multipart upload",
+		auth: "account",
+		input: { params: UploadIdParams, body: MultipartSignPartsRequestSchema },
+		responses: { 200: { description: "Presigned part URLs", schema: MultipartSignPartsResponseSchema } },
+		errors: [403],
+		handle: async ({ account, input }) =>
+			reply.ok(
+				await signMultipartParts(account.slug, {
+					uploadId: input.params.uploadId,
+					uploadKey: input.body.uploadKey,
+					partNumbers: input.body.partNumbers
+				})
+			)
+	}),
+	endpoint({
+		method: "get",
+		path: "/uploads/multipart/{uploadId}/parts",
+		summary: "List the parts already uploaded to a multipart upload, for resuming",
+		auth: "account",
+		input: { params: UploadIdParams, query: MultipartListPartsQuerySchema },
+		responses: { 200: { description: "Uploaded parts", schema: MultipartListPartsResponseSchema } },
+		errors: [403],
+		handle: async ({ account, input }) =>
+			reply.ok(
+				await listMultipartParts(account.slug, { uploadId: input.params.uploadId, uploadKey: input.query.uploadKey })
+			)
 	}),
 	endpoint({
 		method: "delete",

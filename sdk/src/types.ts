@@ -111,6 +111,8 @@ export type {
 	MultipartCreateRequest,
 	MultipartCreateResponse,
 	MultipartCompleteResponse,
+	MultipartListPartsResponse,
+	MultipartSignPartsResponse,
 	PlannedItem,
 	PostProcessDefaults,
 	PostProcessRequest,

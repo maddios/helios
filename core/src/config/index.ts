@@ -13,6 +13,18 @@ const hostList = z.string().transform((value) =>
 		.filter((host) => host.length > 0)
 );
 
+const ORIGIN_PATTERN = /^https?:\/\/[A-Za-z0-9.-]+(:\d{1,5})?$/;
+
+const originList = z
+	.string()
+	.transform((value) =>
+		value
+			.split(",")
+			.map((origin) => origin.trim())
+			.filter((origin) => origin.length > 0)
+	)
+	.pipe(z.array(z.string().regex(ORIGIN_PATTERN, "must be an origin such as https://app.example.com")).min(1));
+
 const scalerNotifySchema = z.discriminatedUnion("SCALER_NOTIFY", [
 	z.object({ SCALER_NOTIFY: z.literal("none") }),
 	z.object({ SCALER_NOTIFY: z.literal("lambda"), SCALER_FUNCTION_NAME: z.string().min(1) })
@@ -34,6 +46,7 @@ const baseSchema = z
 		CDN_BASE_URL: z.url(),
 		UPLOAD_URL_EXPIRY_SEC: z.coerce.number().int().min(MIN_UPLOAD_URL_EXPIRY_SEC),
 		MAX_UPLOAD_BYTES: z.coerce.number().int().positive(),
+		UPLOAD_ALLOWED_ORIGINS: originList,
 		SSRF_ALLOWED_HOSTS: hostList,
 		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive(),
 		SCALER_NOTIFY_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative(),

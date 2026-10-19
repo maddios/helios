@@ -26,6 +26,16 @@
 				"types": "./dist/admin.d.cts",
 				"default": "./dist/admin.cjs"
 			}
+		},
+		"./browser": {
+			"import": {
+				"types": "./dist/browser.d.ts",
+				"default": "./dist/browser.js"
+			},
+			"require": {
+				"types": "./dist/browser.d.cts",
+				"default": "./dist/browser.cjs"
+			}
 		}
 	},
 	"files": [
@@ -42,9 +52,9 @@
 		"access": "restricted"
 	},
 	"scripts": {
-		"prebuild": "node scripts/copy-guides.mjs",
+		"prebuild": "rm -rf dist && node scripts/copy-guides.mjs",
 		"build": "tsup",
-		"test:dist": "tsup && node test/dist/run.mjs",
+		"test:dist": "npm run build && node test/dist/run.mjs",
 		"check:examples": "tsc -p tsconfig.examples.json && node scripts/check-snippets.mjs",
 		"docs": "typedoc"
 	},

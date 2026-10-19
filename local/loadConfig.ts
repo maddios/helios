@@ -18,6 +18,7 @@ const schema = z.object({
 	cdnMode: z.literal("recording"),
 	uploadUrlExpirySec: z.number().int().positive(),
 	maxUploadBytes: z.number().int().positive(),
+	uploadAllowedOrigins: z.array(z.string().min(1)).min(1),
 	sourceBucket: z.string().min(1),
 	api: z.object({
 		port: z.number().int().positive(),
@@ -146,6 +147,7 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		CDN_MODE: config.cdnMode,
 		UPLOAD_URL_EXPIRY_SEC: String(config.uploadUrlExpirySec),
 		MAX_UPLOAD_BYTES: String(config.maxUploadBytes),
+		UPLOAD_ALLOWED_ORIGINS: config.uploadAllowedOrigins.join(","),
 		MONGO_URI: config.mongoUri,
 		LAMBDA_MAX_DURATION_SEC: String(config.lambdaMaxDurationSec),
 		LAMBDA_MAX_SOURCE_BYTES: String(config.lambdaMaxSourceBytes),

@@ -2,6 +2,8 @@ import type {
 	MultipartCompleteResponse,
 	MultipartCreateRequest,
 	MultipartCreateResponse,
+	MultipartListPartsResponse,
+	MultipartSignPartsResponse,
 	PresignedUploadRequest,
 	PresignedUploadResponse,
 	RequestView
@@ -37,7 +39,8 @@ export interface UploadCallOptions {
  * Uploads media to Helios storage, with direct presigned PUTs or multipart upload for large files.
  *
  * `upload` and `uploadAndEncode` handle everything. The lower-level methods (`presign`, `createMultipart`,
- * `completeMultipart`, `abortMultipart`) are for callers that drive the storage PUTs themselves.
+ * `signParts`, `listParts`, `completeMultipart`, `abortMultipart`) are for callers that drive the storage PUTs
+ * themselves, or that hand the parts to the browser (see `@partnrup/helios-sdk/browser`).
  *
  * @example
  * const { uploadKey, request } = await helios.uploads.uploadAndEncode("./clip.mp4", { preset: "generic" });
@@ -147,8 +150,8 @@ export class Uploads {
 	/**
 	 * Starts a multipart upload and returns presigned URLs for every part.
 	 *
-	 * The API returns all part URLs up front, so there is no separate call to sign parts later. The part URLs stay valid for
-	 * `UPLOAD_URL_EXPIRY_SEC` on the server, which is at least six hours.
+	 * The part URLs stay valid for `UPLOAD_URL_EXPIRY_SEC` on the server, which is at least six hours. When URLs expire
+	 * sooner or are lost, use {@link signParts} to get fresh ones.
 	 *
 	 * @param request Filename, total byte size and optional content type.
 	 * @param options Cancellation.
@@ -163,6 +166,60 @@ export class Uploads {
 			path: "/uploads/multipart",
 			body: request,
 			retry: "rateLimitOnly",
+			signal: options.signal
+		});
+	}
+
+	/**
+	 * Presigns fresh PUT URLs for some parts of a multipart upload, such as after URLs expired or were lost in the browser.
+	 *
+	 * Presigning has no side effects, so the call is retried on rate limits, 5xx responses and network errors. Part numbers
+	 * are checked for range and uniqueness; the server does not check them against the planned part count.
+	 *
+	 * @param uploadId Upload id from {@link createMultipart}.
+	 * @param uploadKey Upload key from {@link createMultipart}.
+	 * @param partNumbers Unique 1-based part numbers, from 1 to 10000, at most 1000 per call.
+	 * @param options Cancellation.
+	 * @returns One fresh presigned URL per part number, and when they expire.
+	 * @throws {ValidationError} When a part number is out of range or repeated, or there are more than 1000 (400).
+	 * @throws {PermissionError} When the upload key belongs to another account (403).
+	 * @example
+	 * const { parts } = await helios.uploads.signParts(uploadId, uploadKey, [3, 4]);
+	 */
+	signParts(
+		uploadId: string,
+		uploadKey: string,
+		partNumbers: number[],
+		options: UploadCallOptions = {}
+	): Promise<MultipartSignPartsResponse> {
+		return this.transport.json<MultipartSignPartsResponse>({
+			method: "POST",
+			path: `/uploads/multipart/${encodeURIComponent(uploadId)}/parts`,
+			body: { uploadKey, partNumbers },
+			retry: "idempotent",
+			signal: options.signal
+		});
+	}
+
+	/**
+	 * Lists the parts that storage holds for a multipart upload, so an interrupted upload can resume without re-sending them.
+	 *
+	 * The call is read-only and is retried on rate limits, 5xx responses and network errors.
+	 *
+	 * @param uploadId Upload id from {@link createMultipart}.
+	 * @param uploadKey Upload key from {@link createMultipart}.
+	 * @param options Cancellation.
+	 * @returns The uploaded parts, sorted by part number, with their ETags and sizes.
+	 * @throws {PermissionError} When the upload key belongs to another account (403).
+	 * @example
+	 * const { parts } = await helios.uploads.listParts(uploadId, uploadKey);
+	 */
+	listParts(uploadId: string, uploadKey: string, options: UploadCallOptions = {}): Promise<MultipartListPartsResponse> {
+		return this.transport.json<MultipartListPartsResponse>({
+			method: "GET",
+			path: `/uploads/multipart/${encodeURIComponent(uploadId)}/parts`,
+			query: { uploadKey },
+			retry: "idempotent",
 			signal: options.signal
 		});
 	}

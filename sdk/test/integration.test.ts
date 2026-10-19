@@ -1,6 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ensureIndexes, genericPreset, getAccount } from "@helios/core";
+import { ensureIndexes, genericPreset, getAccount, objectStore } from "@helios/core";
 import { HeliosAdmin } from "../src/admin/client.js";
 import { Helios } from "../src/client.js";
 import {
@@ -307,6 +307,17 @@ describe("uploads", () => {
 		expect(created.parts).toHaveLength(3);
 		expect(created.partSizeBytes).toBe(5 * MB);
 		expect(completed.uploadKey).toBe(created.uploadKey);
+	});
+
+	it("signs fresh part URLs and lists the stored parts of a multipart upload", async () => {
+		const created = await helios.uploads.createMultipart({ filename: "big.mp4", sizeBytes: 12 * MB });
+		jest.mocked(objectStore().listParts).mockResolvedValueOnce([{ partNumber: 1, etag: '"e1"', sizeBytes: 5 * MB }]);
+
+		const signed = await helios.uploads.signParts(created.uploadId, created.uploadKey, [2, 3]);
+		const listed = await helios.uploads.listParts(created.uploadId, created.uploadKey);
+
+		expect(signed.parts.map((part) => part.partNumber)).toEqual([2, 3]);
+		expect(listed.parts).toEqual([{ partNumber: 1, etag: '"e1"', sizeBytes: 5 * MB }]);
 	});
 
 	it("uploads a large input through multipart and encodes it", async () => {

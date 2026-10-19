@@ -42,6 +42,13 @@ module.exports = {
 			to: { path: "^(core|api|worker|functions|local|scripts)/" }
 		},
 		{
+			name: "sdk-browser-is-self-contained",
+			comment: "sdk/src/browser ships to browsers: it imports only its own files, and type-only imports are erased",
+			severity: "error",
+			from: { path: "^sdk/src/browser/" },
+			to: { pathNot: "^sdk/src/browser/", dependencyTypesNot: ["type-only"] }
+		},
+		{
 			name: "contracts-is-a-leaf",
 			severity: "error",
 			from: { path: "^contracts/" },

@@ -25,6 +25,8 @@ export const OPERATIONS: Readonly<Record<string, string>> = {
 	"POST /uploads/presigned": "uploads.presign",
 	"POST /uploads/multipart": "uploads.createMultipart",
 	"POST /uploads/multipart/{uploadId}/complete": "uploads.completeMultipart",
+	"POST /uploads/multipart/{uploadId}/parts": "uploads.signParts",
+	"GET /uploads/multipart/{uploadId}/parts": "uploads.listParts",
 	"DELETE /uploads/multipart/{uploadId}": "uploads.abortMultipart",
 	"POST /files": "files.create",
 	"GET /presets": "presets.list",

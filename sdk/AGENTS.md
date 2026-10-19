@@ -6,7 +6,7 @@ Helios is a multi-tenant encoding and AI post-processing service. Accounts (bell
 
 ## Rules
 
-- Server-side only. An account key (`sk_live_...`) or admin key (`sk_admin_...`) must never reach a browser.
+- Server-side only. An account key (`sk_live_...`) or admin key (`sk_admin_...`) must never reach a browser. The one browser entry, `@partnrup/helios-sdk/browser`, holds no key: the backend creates, re-signs and completes browser uploads.
 - Import the account client from `@partnrup/helios-sdk` and the admin client from `@partnrup/helios-sdk/admin`. Keep `HeliosAdmin` out of account-facing services.
 - Pass every value explicitly. The SDK reads no environment variables. Examples read them with a `requireEnv` helper that throws when they are missing.
 - Errors are `HeliosError` subclasses with `code`, `status` (absent when no response arrived), `requestId` and `details`. Branch on the class, then on `code`.
@@ -19,7 +19,8 @@ Helios is a multi-tenant encoding and AI post-processing service. Accounts (bell
 | Encode a file already in a source bucket    | `encodes.create({ source: { bucket, key }, preset })`                                                                       | Bucket must be allowed for the account. Helios never modifies Kodak-owned objects.                      |
 | Upload a local file or stream and encode it | `uploads.uploadAndEncode(input, { preset, ... })`                                                                           | Returns `{ uploadKey, request }`. Failing encode throws `UploadEncodeError` with `uploadKey`.           |
 | Upload without encoding yet                 | `uploads.upload(input)` then `encodes.create({ source: { uploadKey }, preset })`                                            | Storage only.                                                                                           |
-| Upload from your own storage driver         | `uploads.presign` (one PUT) or `uploads.createMultipart` + `completeMultipart` + `abortMultipart`                           | Multipart part URLs are all returned by `createMultipart`. There is no sign-parts call.                 |
+| Upload from your own storage driver         | `uploads.presign` (one PUT) or `uploads.createMultipart` + `completeMultipart` + `abortMultipart`                           | `signParts` re-presigns expired part URLs and `listParts` lists stored parts for resume.                |
+| Upload a large file from the browser        | Backend: `uploads.createMultipart`, `signParts`, `listParts`, `completeMultipart`. Page: `uploadParts` from `/browser`      | See "Browser uploader". The page never holds a key.                                                     |
 | Raw non-media file (captions, PDFs)         | `files.create({ filename, contentType? })` then PUT to `uploadUrl`                                                          | Served at `url`. Not encoded.                                                                           |
 | Plan without creating anything              | `encodes.create(body, { dryRun: true })` or `presets.dryRun(name, body)`                                                    | Dry run reads the source, creates nothing.                                                              |
 | Wait for an encode to finish                | `requests.wait(id, { timeoutMs?, intervalMs?, signal? })`                                                                   | Polls with backoff until COMPLETE, ERROR or CANCELLED. Failure is returned, not thrown: check `status`. |
@@ -68,6 +69,8 @@ Account client `new Helios({ apiKey, baseUrl, imageBaseUrl?, webhookSecret?, tim
 | `uploads.uploadAndEncode(input, options)`               | Upload, then encode                                   | upload options plus `preset`, `postProcess?`, `destination?` or `callbackUrl?`, `analyze?`                                                                                                                        | `{ uploadKey, request }`                                                     |
 | `uploads.presign(body)`                                 | One presigned PUT                                     | `filename`, `sizeBytes`, `contentType?`                                                                                                                                                                           | `{ uploadKey, url, expiresAt }` (201)                                        |
 | `uploads.createMultipart(body)`                         | Start multipart, all part URLs                        | `filename`, `sizeBytes`, `contentType?`                                                                                                                                                                           | `{ uploadId, uploadKey, partSizeBytes, parts: [{ partNumber, url }] }` (201) |
+| `uploads.signParts(uploadId, uploadKey, partNumbers)`   | Fresh presigned URLs for some parts                   | `partNumbers`: unique, 1-10000, at most 1000                                                                                                                                                                      | `{ parts: [{ partNumber, url }], expiresAt }`                                |
+| `uploads.listParts(uploadId, uploadKey)`                | Parts storage holds, for resume                       | none                                                                                                                                                                                                              | `{ parts: [{ partNumber, etag, sizeBytes }] }`                               |
 | `uploads.completeMultipart(uploadId, body)`             | Finish multipart                                      | `uploadKey`, `parts: [{ partNumber, etag }]`, `encode?`                                                                                                                                                           | `{ uploadKey, request? }`                                                    |
 | `uploads.abortMultipart(uploadId, uploadKey)`           | Discard parts                                         | `uploadId`, `uploadKey`                                                                                                                                                                                           | `void` (204)                                                                 |
 | `files.create(body)`                                    | Presign a raw file                                    | `filename` (1-255), `contentType?`                                                                                                                                                                                | `{ fileKey, uploadUrl, url, expiresAt }` (201)                               |
@@ -105,6 +108,19 @@ Admin client `new HeliosAdmin({ apiKey: "sk_admin_...", baseUrl, ... })` from `@
 | `usage.get(query)`                                                              | Usage per account                                                               | `{ from, to, accounts: [{ accountId, requests, units }] }` |
 | `destinations.test(accountId, destination?)`                                    | Test an account's destination                                                   | `{ ok, httpStatus?, error? }`                              |
 
+## Browser uploader (`@partnrup/helios-sdk/browser`)
+
+Secret-free and dependency-free: it imports nothing from the account client, and it works in any browser (XHR, Blob). Import it only in the page.
+
+- `uploadParts(upload, file, options?)` takes the `upload` from the backend's `createMultipart` (`{ uploadId, uploadKey, partSizeBytes, parts }`) and a `Blob` or `File`. It returns `[{ partNumber, etag }]` sorted by part number. The backend passes that list to `completeMultipart`.
+- `options`: `concurrency` (1-16, default 4), `onProgress({ uploadedBytes, totalBytes })` (never decreases; skipped parts count), `signal` (aborts in-flight parts), `signParts(partNumbers)` (call the backend's renew route; at most once per part on 403), `uploadedParts` (from the backend's `listParts`; they are skipped and validated against the planned size), `maxPartRetries` (0-10, default 3; network errors, 5xx and 429 are retried with backoff).
+- `uploadSingle({ url, headers? }, file, { onProgress?, signal? })` PUTs a whole file to a presigned URL from `uploads.presign`.
+- Errors are `BrowserUploadError` with `code`: `aborted`, `invalid_option`, `invalid_upload`, `invalid_resume`, `part_rejected`, `upload_failed`, plus subclasses `EtagUnavailableError` (`etag_unavailable`: bucket CORS does not expose `ETag`), `PartUrlExpiredError` (`part_url_expired`: 403 with no renewal, or renewal rejected) and `NetworkError` (`network_error`).
+- CORS: the media bucket allows the origins in `UPLOAD_ALLOWED_ORIGINS` for the stage, with `PUT`, `GET` and `HEAD`, and exposes `ETag`. Add each app origin, such as `https://app.example.com` or `http://localhost:5173`, and nothing else.
+- Route pattern: `POST /uploads/multipart/{uploadId}/parts` (renew, body `{ uploadKey, partNumbers }`), `GET /uploads/multipart/{uploadId}/parts?uploadKey=` (stored parts), `POST /uploads/multipart/{uploadId}/complete` (finish). The renew route checks that the key belongs to the account and that part numbers are valid, but not that they are within the planned count.
+
+Example: `examples/browserUpload.backend.ts` and `examples/browserUpload.client.ts`, which the README recipe quotes.
+
 ## Webhooks and EventBridge
 
 Webhook headers: `Helios-Signature` (`t=<unix>,v1=<hex>`, HMAC-SHA256 over `"<t>.<rawBody>"` with the account secret), `Helios-Event-Id` (stable per event across redeliveries), `Helios-Event` (the event name). Tolerance is 300 s. The SDK checks this with a timing-safe compare and rejects surrounding whitespace and upper-case hex, as the server signs.
@@ -141,6 +157,7 @@ Each SDK method declares its retry mode, and the retry policy test table (`test/
 
 - `idempotent`: retries 429, 5xx, network errors and timeouts, up to `maxRetries` (default 3, range 0-10).
   - Reads (GET): `health`, `ready`, `openapi`, `assets.list/get/transcripts/scenes`, `requests.get`, `requests.callbacks.list`, `presets.list/get`, `destinations.eventBridgePolicy`, `account.getDestination`, `usage.get`, and the admin reads `accounts.list`, `presets.list/get`, `usage.get`.
+  - Reads (GET) also include `uploads.listParts`. `uploads.signParts` is a POST that only presigns, so it is idempotent too.
   - Writes that are safe to repeat: `account.setDestination` (PUT), `assets.delete`, `requests.cancel`, `presets.delete`, `presets.removeProfile`, `uploads.abortMultipart`, `keys.revoke`, `admin.presets.delete` (DELETE).
   - Keyed POSTs, which carry a `requestId`: `encodes.create`, `encodes.reencode`, `assets.postProcess`, `uploads.completeMultipart` only when `encode` is given.
   - `encodes.create(..., { dryRun: true })` is idempotent because it writes nothing.
@@ -165,6 +182,7 @@ Rate limits: `Retry-After` is honoured up to `maxRetryAfterMs` (default 30000). 
 | `assets.delete`                                                            |                                                      |                       | purge accepted        |         | 404                                                       |
 | `uploads.completeMultipart`                                                | completed, or repeated encode                        | sync encode created   | async encode accepted |         | 400, 403 (other account's key), 404, 409, 422             |
 | `uploads.presign`, `createMultipart`, `files.create`                       |                                                      | created               |                       |         | 400 (size over `MAX_UPLOAD_BYTES`)                        |
+| `uploads.signParts`                                                        | parts presigned                                      |                       |                       |         | 400 (part numbers), 403 (other account's key)             |
 | `uploads.abortMultipart`, `presets.delete`, `keys.revoke`                  |                                                      |                       |                       | no body |                                                           |
 | `presets.create`, `presets.clone`                                          |                                                      | created               |                       |         | 409 (name taken)                                          |
 | `presets.update`, `addProfile`, `updateProfile`, `removeProfile`, `dryRun` | updated                                              |                       |                       |         | 403 (system preset), 409 (`preset_version_conflict`), 400 |
@@ -233,18 +251,20 @@ Bella is account 1. Kodak keeps the raw store and CDN (`assets.lionize.ai`, `${s
 8. Use `item.completed` only for progress UI. Terminal state comes from `request.*`.
 9. Deletion: when bella deletes a video, call `assets.delete(assetId)` and wait for `asset.deleted`. Kodak-owned source objects remain bella's to delete.
 10. Errors in bella: map `ConflictError` on re-encode to "already processing", `UploadEncodeError` to "stored, encode again", and `RateLimitError` to a queued retry after `retryAfterMs`.
+11. Browser uploads from bella-frontend: the backend starts the upload with `uploads.createMultipart` and passes `upload` to the page. Add the origin of each bella-frontend stage (for example `http://localhost:5173` in dev, the production host in prod) to that stage's `UPLOAD_ALLOWED_ORIGINS`. Keep three routes in bella's backend: start, renew (`signParts`, called on 403) and stored parts (`listParts`, for resume after a reload). Finish with `completeMultipart`. Never send the key to the page.
 
 ## Integration checklist: novel
 
 Novel is account 2. Novel's Cloudinary transforms move to `images.url`.
 
-1. Server-side only. The browser never holds a Helios key. Uploads go through novel's backend: `uploads.uploadAndEncode` for a file the backend already has, or `uploads.createMultipart` with `completeMultipart` for large files the backend streams from its own storage. Browser-direct presigned uploads are not part of the Phase 1 flow.
+1. Server-side only. The browser never holds a Helios key. Uploads go through novel's backend: `uploads.uploadAndEncode` for a file the backend already has, or `uploads.createMultipart` with `completeMultipart` for large files the backend streams from its own storage. Large browser uploads use `@partnrup/helios-sdk/browser` (see "Browser uploader"), with novel's backend creating, re-signing and completing the upload.
 2. Preset: use `generic` until the `novel_video` preset ships in phase 1b. Then clone it into a tenant preset and version it with `expectedVersion`.
 3. Images: replace Cloudinary URLs with `images.url(key, { w, h, c, g, b, q, f }, version)`. Use `asset.outputs[profile].key` for image outputs and `asset.outputs[profile].items[i].key` for stills.
 4. Webhooks: same as bella, with novel's own secret and endpoint. Dedupe and sequence rules are identical.
 5. EventBridge: if novel's infrastructure consumes events from a bus it owns, follow `guides/eventbridge.md` and use `webhooks.eventBridgeDetail` in the Lambda consumer.
 6. Post-processing later: `assets.postProcess` for translations, transcripts and scenes on assets that were encoded without them.
 7. Account features: `peopleAttributes` is off by default. Enable it with `admin.accounts.update` only where scene people are needed.
+8. Browser uploads from novel: list each novel web origin per stage in `UPLOAD_ALLOWED_ORIGINS` (the dev origin locally, the production origin in prod), since bucket CORS is bucket-wide. Re-sign expired parts through novel's backend (`uploads.signParts`) and resume from `uploads.listParts` after a reload, so an interrupted upload does not restart.
 
 ## Known gaps
 

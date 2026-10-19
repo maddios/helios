@@ -2,6 +2,7 @@ import {
 	AbortMultipartUploadCommand,
 	CompleteMultipartUploadCommand,
 	CreateMultipartUploadCommand,
+	ListPartsCommand,
 	S3Client
 } from "@aws-sdk/client-s3";
 import { mockClient } from "aws-sdk-client-mock";
@@ -55,6 +56,28 @@ describe("S3ObjectStore uploads", () => {
 		expect(url).toContain("X-Amz-Expires=600");
 		expect(url).toContain("partNumber=3");
 		expect(url).toContain("uploadId=up-1");
+	});
+
+	it("lists every uploaded part across pages", async () => {
+		s3Mock
+			.on(ListPartsCommand)
+			.resolvesOnce({
+				Parts: [{ PartNumber: 1, ETag: '"etag-1"', Size: 5 }],
+				IsTruncated: true,
+				NextPartNumberMarker: "1"
+			})
+			.resolvesOnce({ Parts: [{ PartNumber: 2, ETag: '"etag-2"', Size: 3 }], IsTruncated: false });
+
+		expect(await store().listParts(KEY, "up-1")).toEqual([
+			{ partNumber: 1, etag: '"etag-1"', sizeBytes: 5 },
+			{ partNumber: 2, etag: '"etag-2"', sizeBytes: 3 }
+		]);
+		expect(s3Mock.commandCalls(ListPartsCommand)).toHaveLength(2);
+		expect(s3Mock.commandCall(0, ListPartsCommand).args[0].input).toMatchObject({
+			Bucket: "media-bucket",
+			Key: KEY,
+			UploadId: "up-1"
+		});
 	});
 
 	it("completes a multipart upload with the given parts", async () => {

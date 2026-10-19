@@ -9,6 +9,7 @@ import {
 	DeleteObjectsCommand,
 	GetObjectCommand,
 	HeadObjectCommand,
+	ListPartsCommand,
 	paginateListObjectsV2,
 	PutObjectCommand,
 	type S3Client,
@@ -17,7 +18,7 @@ import {
 import { S3ServiceException } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { ObjectInfo, ObjectStore } from "./types";
+import type { ObjectInfo, ObjectStore, UploadedPart } from "./types";
 
 const DELETE_BATCH_SIZE = 1000;
 
@@ -188,5 +189,22 @@ export class S3ObjectStore implements ObjectStore {
 
 	async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
 		await this.client.send(new AbortMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId }));
+	}
+
+	async listParts(key: string, uploadId: string): Promise<UploadedPart[]> {
+		const parts: UploadedPart[] = [];
+		let marker: string | undefined;
+		do {
+			const page = await this.client.send(
+				new ListPartsCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId, PartNumberMarker: marker })
+			);
+			for (const part of page.Parts ?? []) {
+				if (part.PartNumber !== undefined && part.ETag !== undefined) {
+					parts.push({ partNumber: part.PartNumber, etag: part.ETag, sizeBytes: part.Size ?? 0 });
+				}
+			}
+			marker = page.IsTruncated === true ? page.NextPartNumberMarker : undefined;
+		} while (marker !== undefined);
+		return parts;
 	}
 }

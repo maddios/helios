@@ -1,4 +1,11 @@
-import { CreateBucketCommand, HeadBucketCommand, S3Client, type BucketLocationConstraint } from "@aws-sdk/client-s3";
+import {
+	CreateBucketCommand,
+	HeadBucketCommand,
+	PutBucketCorsCommand,
+	S3Client,
+	type BucketLocationConstraint,
+	type CORSConfiguration
+} from "@aws-sdk/client-s3";
 import {
 	CreateEventBusCommand,
 	DescribeEventBusCommand,
@@ -83,9 +90,34 @@ export async function bootstrap(
 			result.created.push(bucket);
 		}
 	}
+	await s3.send(
+		new PutBucketCorsCommand({
+			Bucket: local.mediaBucket,
+			CORSConfiguration: mediaCorsConfiguration(local.uploadAllowedOrigins)
+		})
+	);
+	result.updated.push(`${local.mediaBucket} CORS`);
 	const eventbridge = new EventBridgeClient({ region: local.awsRegion, endpoint: local.awsEndpoint });
 	await ensureEventCapture(eventbridge, sqs, local, result, visibilityTimeout);
 	return result;
+}
+
+/**
+ * CORS rules of the media bucket, so browsers can PUT parts to presigned URLs from the allowed origins and read each
+ * part's ETag. The infra template (`infra/media.yml`) carries the same rules.
+ */
+export function mediaCorsConfiguration(origins: string[]): CORSConfiguration {
+	return {
+		CORSRules: [
+			{
+				AllowedOrigins: origins,
+				AllowedMethods: ["PUT", "GET", "HEAD"],
+				AllowedHeaders: ["*"],
+				ExposeHeaders: ["ETag"],
+				MaxAgeSeconds: 3000
+			}
+		]
+	};
 }
 
 function redrivePolicy(deadLetterTargetArn: string, maxReceiveCount: number): string {

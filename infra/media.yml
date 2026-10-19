@@ -1,0 +1,31 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Helios media bucket with browser upload CORS (PUT/GET/HEAD, ETag exposed) for presigned multipart parts
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues: [dev, prod]
+  MediaBucketName:
+    Type: String
+  UploadAllowedOrigins:
+    Type: CommaDelimitedList
+    Description: Origins allowed to PUT parts from the browser, for example https://app.example.com. Exact origins only, no paths or wildcards.
+
+Resources:
+  MediaBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Ref MediaBucketName
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: !Ref UploadAllowedOrigins
+            AllowedMethods: [PUT, GET, HEAD]
+            AllowedHeaders: ["*"]
+            ExposedHeaders: [ETag]
+            MaxAge: 3000
+
+Outputs:
+  Bucket:
+    Value: !Ref MediaBucket

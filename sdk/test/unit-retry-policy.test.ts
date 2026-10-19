@@ -56,6 +56,8 @@ const METHODS: [string, Mode, Invoke][] = [
 				encode: { preset: "p", analyze: "async" }
 			})
 	],
+	["uploads.signParts", "idempotent", (h) => h.uploads.signParts("u1", "k", [1])],
+	["uploads.listParts", "idempotent", (h) => h.uploads.listParts("u1", "k")],
 	["uploads.abortMultipart", "idempotent", (h) => h.uploads.abortMultipart("u1", "k")],
 	["files.create", "rateLimitOnly", (h) => h.files.create({ filename: "a.pdf" })],
 	["presets.list", "idempotent", (h) => h.presets.list()],

@@ -9,4 +9,5 @@ export function mockObjectStore(): void {
 	jest.spyOn(store, "createMultipartUpload").mockResolvedValue("upload-1");
 	jest.spyOn(store, "completeMultipartUpload").mockResolvedValue();
 	jest.spyOn(store, "abortMultipartUpload").mockResolvedValue();
+	jest.spyOn(store, "listParts").mockResolvedValue([]);
 }

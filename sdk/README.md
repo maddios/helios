@@ -320,6 +320,74 @@ for (const day of usage.days) {
 }
 ```
 
+### Browser uploads (backend + browser)
+
+Large files go from the browser straight to storage, so the file never passes through your backend. The backend keeps the secret key. It creates the multipart upload, re-signs parts whose URLs expired, lists the parts storage already holds so an interrupted upload can resume, and completes the upload. The page uses `@partnrup/helios-sdk/browser`, which holds no key and reports progress through XHR.
+
+The backend handles four routes: start (`startBrowserUpload`), stored parts (`storedBrowserParts`), renew (`renewBrowserParts`) and finish (`finishBrowserUpload`). Protect these routes as you protect the rest of your API. The example leaves that to your app.
+
+```ts
+import { Helios } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL")
+});
+
+export async function startBrowserUpload(filename: string, sizeBytes: number) {
+	return helios.uploads.createMultipart({ filename, sizeBytes, contentType: "video/mp4" });
+}
+
+export async function renewBrowserParts(uploadId: string, uploadKey: string, partNumbers: number[]) {
+	return helios.uploads.signParts(uploadId, uploadKey, partNumbers);
+}
+
+export async function storedBrowserParts(uploadId: string, uploadKey: string) {
+	return (await helios.uploads.listParts(uploadId, uploadKey)).parts;
+}
+
+export async function finishBrowserUpload(
+	uploadId: string,
+	uploadKey: string,
+	parts: { partNumber: number; etag: string }[]
+) {
+	return helios.uploads.completeMultipart(uploadId, { uploadKey, parts });
+}
+```
+
+In the page, pass the upload from your start route. The uploader slices the file, sends the parts with bounded concurrency, retries network errors, and renews a part whose URL expired (403).
+
+```ts
+import { uploadParts, type MultipartUpload, type PartUrl, type UploadedPart } from "@partnrup/helios-sdk/browser";
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+	const res = await fetch(path, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify(body)
+	});
+	return (await res.json()) as T;
+}
+
+export async function uploadVideo(
+	file: Blob,
+	upload: MultipartUpload,
+	onProgress: (fraction: number) => void
+): Promise<void> {
+	const uploadedParts = await postJson<UploadedPart[]>("/api/uploads/stored", upload);
+	const parts = await uploadParts(upload, file, {
+		concurrency: 4,
+		uploadedParts,
+		onProgress: ({ uploadedBytes, totalBytes }) => onProgress(uploadedBytes / totalBytes),
+		signParts: (partNumbers) => postJson<PartUrl[]>("/api/uploads/renew", { ...upload, partNumbers })
+	});
+	await postJson("/api/uploads/finish", { ...upload, parts });
+}
+```
+
+Bucket CORS must allow your app's origin and expose `ETag`. Helios sets this from `UPLOAD_ALLOWED_ORIGINS` for each stage, so add your dev origin (for example `http://localhost:5173`) there. Without an exposed `ETag`, `uploadParts` throws `EtagUnavailableError`.
+
 ### Errors and retries
 
 Every error the SDK throws is a `HeliosError` with `code`, `status` (absent when no response was received) and `requestId`. The subclasses are:

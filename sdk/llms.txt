@@ -6,7 +6,7 @@ Use this package only on a server: it holds an account API key. Verify webhooks 
 
 ## Docs
 
-- [README](./README.md): install, quickstart with webhook verification in Express, one recipe per task (source encode, analysis mode, translations, transcripts, scenes and stills, image URLs, presets, re-encode, cancel, purge, destinations, usage, errors, admin).
+- [README](./README.md): install, quickstart with webhook verification in Express, one recipe per task (source encode, analysis mode, translations, transcripts, scenes and stills, image URLs, presets, re-encode, cancel, purge, destinations, browser uploads, usage, errors, admin).
 - [AGENTS](./AGENTS.md): agent reference. Method selection table, method index with parameters and returns, event catalogue, idempotency and retry rules, status codes, limits, and integration checklists for bella and novel.
 - [Webhooks guide](./guides/webhooks.md): headers, signature verification, idempotency, ordering, retries, redelivery and the `helios.test` event.
 - [EventBridge guide](./guides/eventbridge.md): bus setup, resource policy, destination configuration, rules and troubleshooting.
@@ -15,6 +15,8 @@ Use this package only on a server: it holds an account API key. Verify webhooks 
 
 - `new Helios({ apiKey, baseUrl, imageBaseUrl?, webhookSecret?, maxRetries?, timeoutMs? })`: account client with resources `encodes`, `assets`, `requests`, `uploads`, `files`, `presets`, `destinations`, `account`, `usage`, plus `webhooks` and `images`.
 - `helios.uploads.uploadAndEncode(input, { preset, ... })`: store a file, then encode it. Returns `{ uploadKey, request }`.
+- `helios.uploads.createMultipart`, `signParts`, `listParts`, `completeMultipart`: multipart upload for a browser or your own driver. Use `uploadParts` from `@partnrup/helios-sdk/browser` in the page, with no key.
+- `uploadParts(upload, file, { concurrency, onProgress, signal, signParts, uploadedParts, maxPartRetries })` from "@partnrup/helios-sdk/browser": XHR upload of the parts with progress, retries, 403 renewal and resume. Returns the ETags. `uploadSingle(presigned, file)` covers one PUT.
 - `helios.requests.wait(id, { timeoutMs? })`: poll until COMPLETE, ERROR or CANCELLED.
 - `helios.webhooks.verify(rawBody, signatureHeader)`: check the signature and parse a typed `WebhookEvent`.
 - `helios.webhooks.eventBridgeDetail(event)`: parse an EventBridge event's `detail` into a `WebhookEvent`.

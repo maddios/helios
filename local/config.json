@@ -14,6 +14,7 @@
 	"cdnMode": "recording",
 	"uploadUrlExpirySec": 21600,
 	"maxUploadBytes": 10737418240,
+	"uploadAllowedOrigins": ["http://localhost:5173", "http://localhost:3000"],
 	"lambdaMaxDurationSec": 180,
 	"lambdaMaxSourceBytes": 524288000,
 	"logLevel": "debug",

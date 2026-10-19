@@ -68,7 +68,7 @@ describe("uploads", () => {
 			expect(response.uploadKey).toMatch(/^acme\/uploads\/[0-9a-f-]{36}\/clip\.mp4$/);
 			expect(response.url).toContain("/acme/uploads/");
 			expect(response.url).toContain("/clip.mp4?");
-			expect(response.url).toContain("X-Amz-Expires=900");
+			expect(response.url).toContain("X-Amz-Expires=21600");
 		});
 
 		it("builds the upload key from the sanitized filename", async () => {

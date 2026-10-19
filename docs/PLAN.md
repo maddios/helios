@@ -406,7 +406,7 @@ Person = { species|null, genderPresentation|null, approximateAge|null (range, e.
 
 ```ts
 const helios = new Helios({ apiKey });
-const { asset, request } = await helios.uploads.uploadAndEncode(file, { preset: "generic", onProgress });
+const { uploadKey, request } = await helios.uploads.uploadAndEncode(file, { preset: "generic", onProgress });
 await helios.requests.wait(request.id); // polling helper with backoff
 const event = helios.webhooks.verify(rawBody, signatureHeader); // typed discriminated union
 ```
@@ -415,7 +415,7 @@ const event = helios.webhooks.verify(rawBody, signatureHeader); // typed discrim
 
 | Namespace     | Methods                                                                                                                                                    |
 | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `uploads`     | Manual multipart: `create`/`signParts`/`complete`/`abort`. `uploadAndEncode` handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
+| `uploads`     | Manual multipart: `presign`, `createMultipart`/`completeMultipart`/`abortMultipart` (every part URL comes from `createMultipart`; there is no `signParts`). `uploadAndEncode` returns `{ uploadKey, request }` and handles part sizing, concurrency, per-part retry, `AbortSignal` and progress. |
 | `encodes`     | `create` (`dryRun`, `requestId` idempotency, `postProcess`), `reencode` (`refreshPreset`)                                                                  |
 | `requests`    | `get`, `cancel`, `wait`, `callbacks.list`/`redeliver`                                                                                                      |
 | `assets`      | `get`, `delete` (purge), `setActiveStill`, `postProcess`                                                                                                   |
@@ -431,7 +431,7 @@ const event = helios.webhooks.verify(rawBody, signatureHeader); // typed discrim
 - **Publishing happens only through GitHub Actions**, in the deploy workflow, using the `NPM_AUTH_TOKEN` repo secret. Nothing is published from a local machine.
 - Built on native `fetch`, with no AWS SDK.
 - Typed `HeliosError` subclasses with `code`, `status` and `requestId`.
-- Automatic retries on 429/5xx, with the idempotency key reused across them.
+- Retries follow each call's mode: idempotent calls (GET, PUT, DELETE and keyed POSTs) retry 429, 5xx, network errors and timeouts; every other write retries only 429. The idempotency key is reused across attempts.
 
 **Self-documenting, for both humans and agents:**
 
@@ -985,7 +985,7 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Purge:** deletes the originals first (media, sources, and the upload key), then lists and deletes `resize_cache/{slug}/media/{assetId}/`, then queues `/{slug}/media/{assetId}/*` only. Sources and uploads are never served by the CDN, so they are not invalidated.
 - **Raw file delete/overwrite** (`/files`) queues that key's directory prefix.
 
-**URL builders:** `imageUrl(key, transform, version?)` in core (canonical params) and in the SDK. The API returns `images` helpers only where useful: stills and image outputs get a `thumbnailUrl` example in docs, with no per-variant fields.
+**URL builders:** `imageUrl(key, transform, version?)` in core (canonical params) and in the SDK. Both use the one canonicalizer in `contracts/src/images` (params, validation, canonical order, key rules). The API returns `images` helpers only where useful: stills and image outputs get a `thumbnailUrl` example in docs, with no per-variant fields.
 
 **Local:** `local/imageEdge.ts` (`helios-img` compose service, host network):
 - An Express server emulates the CloudFront Function and the origin group: canonicalize/rewrite, then S3 `resize_cache` GET from LocalStack, falling back to invoking the real image Lambda handler with a Function-URL-shaped event. It passes the 302 through to the client, as CloudFront does.
@@ -1020,6 +1020,46 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
   - Verify both image function permissions (`lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` for CloudFront Lambda origins) against current AWS docs before deploying.
   - The image Lambda role needs `s3:ListBucket` on the media bucket. Without it, HeadObject returns 403 for a missing original rather than 404, and the request fails with a 500 instead of the 404 the handler intends. It also needs `s3:GetObject`, `s3:PutObject` on `resize_cache/*` and `s3:DeleteObject` on `resize_cache/*` (the mismatch cleanup).
   - The scaler Lambda needs `CDN_MODE=cloudfront`, `CDN_DISTRIBUTION_ID`, and `cloudfront:ListInvalidations` and `cloudfront:CreateInvalidation`, or the drainer fails on every run.
+
+## Step 8 design: SDK (`sdk/`, `@partnrup/helios-sdk`)
+
+**Packaging:**
+- Node ≥ 18.17, server-side only (secret keys). Only standard globals are used, so no `AbortSignal.any`.
+- Built with `tsup`, producing ESM + CJS plus one bundled `.d.ts`. `@helios/contracts` is **bundled** (types and the zod schemas used at runtime), so the published package depends only on `zod`.
+- `version` lives in `sdk/package.json`. Publishing happens **only** through `.github/workflows/sdk-publish.yml`, on a `sdk-v*` tag, with the `NPM_AUTH_TOKEN` repo secret. Nothing is published locally.
+
+**Client:** `new Helios({ apiKey, baseUrl, imageBaseUrl?, webhookSecret?, timeoutMs?, maxRetries?, fetch? })`.
+- **Transport:** native `fetch` with typed JSON. Each call declares a retry mode (see Implementation rules). Retries use exponential backoff, honour `Retry-After` up to `maxRetryAfterMs` (default 30000; a longer one throws `RateLimitError` at once with `retryAfterMs`), and are capped by `maxRetries`. A 2xx body that is not JSON throws `ApiError` with code `invalid_response` (204 is empty by design).
+- **Idempotency:** each create call (encode, re-encode, post-process, upload-and-encode) generates a `requestId` once and reuses it on every retry.
+- **Errors:** responses map to `HeliosError` subclasses (`ValidationError`, `AuthenticationError`, `PermissionError`, `NotFoundError`, `ConflictError`, `UnprocessableError`, `RateLimitError`, `ServiceUnavailableError`, `ApiError`) carrying `code`, `status`, `details` and `requestId` (the `x-request-id` header).
+
+**Resources** (thin, typed from the contracts):
+- `encodes`, `assets` (incl. transcripts, scenes and active still), `requests` (incl. `wait` and callbacks), `uploads`, `files`, `presets`, `destinations`, `account`, `usage`.
+- `admin` is a separate entry point, `@partnrup/helios-sdk/admin`, so account-scoped integrations don't carry admin methods.
+- **`uploads.uploadAndEncode(input, options)`:** `input` = file path | Buffer | Readable | Blob. It returns `{ uploadKey, request }`. It uses a presigned PUT under the multipart threshold (default 100 MiB, at most 5 GiB), otherwise multipart with the server-chosen part size, bounded part concurrency, per-part retry, `onProgress`, `AbortSignal`, and an abort-multipart on failure. A stored upload whose encode fails throws `UploadEncodeError`, which carries the `uploadKey`.
+- **`requests.wait(id, { timeoutMs, intervalMs, signal })`:** polls until the request reaches a terminal state.
+- **`webhooks.verify(rawBody, signatureHeader, { secret?, toleranceSec? })`:** checks the signature with a timing-safe compare and parses the body with the contracts schema, returning a typed `WebhookEvent` union. `webhooks.eventBridgeDetail(event)` gives the typed detail for EventBridge consumers.
+- **`images.url(key, transform, version?)`:** a pure, canonical builder (same canonicalization as core and the edge, guarded by parity tests).
+
+**Self-documentation:**
+- TSDoc on every export (`@example`, `@throws`, defaults).
+- `sdk/README.md`: quickstart plus recipes.
+- `sdk/AGENTS.md` + `sdk/llms.txt`: a dense agent reference with method selection, the event catalogue, idempotency and retries, and integration checklists for bella (Kodak buckets, webhook + HMAC on rawBody) and novel. The webhook and EventBridge guides come from `docs/guides/*.md`, copied in at build time (one source).
+- TypeDoc output goes to `sdk/docs/`.
+- `sdk/examples/*.ts` are type-checked in CI.
+
+**Tests:**
+- Unit tests: transport, retries, idempotency reuse, error mapping, multipart, verify, url builder.
+- A **contract test**: every OpenAPI operation maps to an SDK method.
+- An **integration test**: the real API runs in-process on memory Mongo + mocked AWS, and each SDK method is called against it.
+
+**Built (2026-10-19, docs, examples and workflows):**
+- `sdk/README.md`, `sdk/AGENTS.md` and `sdk/llms.txt` are written. Every fenced TypeScript block is checked as a verbatim run of lines from `sdk/examples/*.ts` by `npm run check:examples -w sdk`, so the docs cannot drift.
+- `sdk/examples/*.ts` (14 files, one per task) are type-checked against the built `dist` declarations through `sdk/tsconfig.examples.json`.
+- `docs/guides/*.md` are copied into `sdk/guides/` by `prebuild` and shipped in `files`. `sdk/guides/` and `sdk/docs/` are git-ignored.
+- TypeDoc (`typedoc` 0.28.20) builds `sdk/docs/` from both entry points with `treatWarningsAsErrors`, `notDocumented` and `notExported` validation, and the README as index.
+- `.github/workflows/sdk-publish.yml` publishes on `sdk-v*` tags. `.github/workflows/ci.yml` runs tsc, jest, depcheck, prettier and the SDK checks on pull requests and pushes to `main`.
+- Gaps found while documenting, not changed: `images.url` cannot express fill crop or gravity, which the server grammar supports. PLAN's SDK design lists only `w,h,q,f,pad,bg`, so the SDK follows that surface.
 
 ## Local development & testing
 
@@ -1315,3 +1355,23 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **2026-10-19:** `b` and `g` are valid only with `c_pad` and `c_fill`, and `b` is lowercase hex only. Ignored parameters would give one output several cache keys, so they are rejected.
 - **2026-10-19:** source size and pixel limits are configuration (`IMAGE_MAX_SOURCE_BYTES`, `IMAGE_MAX_INPUT_PIXELS`, both required), not constants. The inline limit is measured on the base64 body.
 - **2026-10-19:** a source format without an encoder (gif, tiff) needs an explicit `f`. No fallback format is chosen silently.
+- **2026-10-19:** the SDK bundles contracts (runtime dependency zod only), has a separate admin entry point, and is published only via the GitHub Actions `sdk-v*` tag workflow.
+- **2026-10-19 (step 8 SDK review fixes):**
+  - A: multipart part URLs are issued up front by `createMultipart`. Core rejects `UPLOAD_URL_EXPIRY_SEC` below 21600 (six hours), so every part URL outlives a large upload sent part by part.
+  - B: `uploadAndEncode` returns `{ uploadKey, request }` (the request carries `assetId`). An encode failure after the upload is stored throws `UploadEncodeError` with the `uploadKey`, so the encode can be retried without re-uploading.
+  - C: the client multipart threshold stays at 100 MiB and is capped at 5 GiB. Part size is chosen by the server.
+  - D: `z.input` types stay for request bodies, so defaults and shorthands can be omitted.
+  - E: the `health`, `ready`, `openapi` and `account.getDestination` surfaces are kept as built.
+  - F: tsup's DTS builder always sets `baseUrl`, which TS 6 deprecates. The deprecation is silenced only in `sdk/tsconfig.build.json`, and tsup resolves `@helios/contracts` through the `paths` mapping. The jest override uses `module: commonjs` alone, with no deprecated option.
+  - G: an unknown webhook event type throws `WebhookError` with code `payload_invalid`. Upgrade the SDK before the server starts sending new event types.
+  - Retry modes: GET, PUT and DELETE and keyed POSTs (`encodes.create`, `encodes.reencode`, `assets.postProcess`, `completeMultipart` with `encode`) are `idempotent`. Every other write is `rateLimitOnly`, so it retries 429 only. The per-method table is in `sdk/test/unit-retry-policy.test.ts`.
+  - Errors: `ValidationError` has no `status` when raised locally. The API error classes share one base, and `RateLimitError` carries `retryAfterMs`. The entry points share one set of error classes, which the dist check verifies in CJS and ESM.
+  - Validation: `timeoutMs`, `maxRetries`, `retryBaseDelayMs`, `maxRetryAfterMs`, `concurrency`, `partTimeoutMs`, `multipartThresholdBytes` and `toleranceSec` are integers within bounds. An empty webhook secret is rejected. Out-of-range values throw `ConfigurationError`.
+  - Integrity: a single PUT or multipart upload whose bytes differ from the declared size fails with `UploadError` code `size_mismatch`. A failing source waits for running parts before the multipart upload is aborted.
+  - Images: the canonicalizer moved to `contracts/src/images`. Core and the SDK import it, and one shared table runs against both and `infra/edge/imgRewrite.js`.
+  - Webhook signatures follow the core signer: no surrounding whitespace, lowercase hex only.
+  - Packaging: `exports` nests `types` under `import` and `require`. The package declares `engines.node` `>=18.17`. The built declarations are self-contained, and `npm run test:dist -w sdk` checks them and the CJS and ESM entries.
+- **2026-10-19 (step 8 docs and publish):**
+  - Publish access is `restricted` (a private scoped package), in `publishConfig` and in `sdk-publish.yml`. Confirmed by the user (2026-10-19): internal use only. `--provenance` is not used, because npm provenance requires a public repository.
+  - `encodes.create` with `dryRun: true` is classified `idempotent`. It has no side effects, so GET-like retries are safe. The retry-policy table is updated.
+  - The SDK's image URL builder supports `pad`/`bg` only, per the SDK design. Fill crop and gravity are a known gap, which the docs state.

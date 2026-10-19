@@ -43,11 +43,10 @@ function integer(name: ParamName, value: string | undefined, max: number): numbe
 	if (value === undefined) {
 		return undefined;
 	}
-	const parsed = Number(value);
-	if (!INTEGER_PATTERN.test(value) || parsed > max) {
+	if (!INTEGER_PATTERN.test(value) || Number(value) > max) {
 		throw invalidValue(name, value);
 	}
-	return parsed;
+	return Number(value);
 }
 
 function choice<T extends string>(name: ParamName, value: string | undefined, options: readonly T[]): T | undefined {
@@ -62,13 +61,44 @@ function choice<T extends string>(name: ParamName, value: string | undefined, op
 }
 
 function hexColor(value: string | undefined): string | undefined {
-	if (value === undefined) {
-		return undefined;
-	}
-	if (!HEX_PATTERN.test(value)) {
+	if (value !== undefined && !HEX_PATTERN.test(value)) {
 		throw invalidValue("b", value);
 	}
 	return value;
+}
+
+/**
+ * Checks the values of a transform the way the URL parser does: ranges, enums, colour syntax and the parameter
+ * dependencies. Callers that build a transform from typed values run this before canonicalising.
+ *
+ * @param transform The transform to check.
+ * @returns The same transform.
+ * @throws {ImageError} With code `invalid_value`, `missing_dimension` or `not_applicable`.
+ */
+export function checkImageTransform(transform: ImageTransform): ImageTransform {
+	checkInteger("w", transform.w, MAX_DIMENSION);
+	checkInteger("h", transform.h, MAX_DIMENSION);
+	checkInteger("q", transform.q, MAX_QUALITY);
+	if (transform.c !== undefined && !(CROP_MODES as readonly string[]).includes(transform.c)) {
+		throw invalidValue("c", transform.c);
+	}
+	if (transform.g !== undefined && !(GRAVITIES as readonly string[]).includes(transform.g)) {
+		throw invalidValue("g", transform.g);
+	}
+	if (transform.f !== undefined && !(IMAGE_FORMATS as readonly string[]).includes(transform.f)) {
+		throw invalidValue("f", transform.f);
+	}
+	if (transform.b !== undefined && !HEX_PATTERN.test(transform.b)) {
+		throw invalidValue("b", transform.b);
+	}
+	assertDependencies(transform);
+	return transform;
+}
+
+function checkInteger(name: ParamName, value: number | undefined, max: number): void {
+	if (value !== undefined && (!Number.isInteger(value) || value < 1 || value > max)) {
+		throw invalidValue(name, String(value));
+	}
 }
 
 function assertDependencies(transform: ImageTransform): void {
@@ -85,7 +115,7 @@ function assertDependencies(transform: ImageTransform): void {
 
 export function parseImageParams(segment: string): ImageTransform {
 	const raw = readRawParams(segment);
-	const transform: ImageTransform = {
+	return checkImageTransform({
 		w: integer("w", raw.w, MAX_DIMENSION),
 		h: integer("h", raw.h, MAX_DIMENSION),
 		c: choice("c", raw.c, CROP_MODES),
@@ -93,9 +123,7 @@ export function parseImageParams(segment: string): ImageTransform {
 		b: hexColor(raw.b),
 		q: integer("q", raw.q, MAX_QUALITY),
 		f: choice("f", raw.f, IMAGE_FORMATS)
-	};
-	assertDependencies(transform);
-	return transform;
+	});
 }
 
 export function canonicalParams(transform: ImageTransform): string {

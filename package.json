@@ -9,12 +9,13 @@
 		"core",
 		"worker",
 		"api",
+		"sdk",
 		"functions"
 	],
 	"scripts": {
 		"test": "jest",
 		"typecheck": "tsc -p tsconfig.json --noEmit",
-		"depcheck": "depcruise contracts/src core/src worker/src api/src functions/src local scripts --config .dependency-cruiser.js",
+		"depcheck": "depcruise contracts/src core/src worker/src api/src functions/src sdk/src local scripts --config .dependency-cruiser.js",
 		"lint": "npm run typecheck && npm run depcheck",
 		"format": "prettier --write .",
 		"local:bootstrap": "tsx local/bootstrap.ts",

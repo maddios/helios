@@ -3,6 +3,9 @@ import { z } from "zod";
 export const StageSchema = z.enum(["local", "dev", "prod"]);
 export type Stage = z.infer<typeof StageSchema>;
 
+/** Multipart part URLs are issued up front, so they must outlive a large upload that is sent part by part. */
+const MIN_UPLOAD_URL_EXPIRY_SEC = 21600;
+
 const hostList = z.string().transform((value) =>
 	value
 		.split(",")
@@ -29,7 +32,7 @@ const baseSchema = z
 		S3_ENDPOINT: z.url().optional(),
 		SQS_FAIR_QUEUES: z.enum(["true", "false"]).transform((value) => value === "true"),
 		CDN_BASE_URL: z.url(),
-		UPLOAD_URL_EXPIRY_SEC: z.coerce.number().int().positive(),
+		UPLOAD_URL_EXPIRY_SEC: z.coerce.number().int().min(MIN_UPLOAD_URL_EXPIRY_SEC),
 		MAX_UPLOAD_BYTES: z.coerce.number().int().positive(),
 		SSRF_ALLOWED_HOSTS: hostList,
 		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive(),

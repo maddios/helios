@@ -5,3 +5,5 @@ coverage/
 .env
 *.log
 infra/cdn.rendered.yml
+sdk/docs/
+sdk/guides/

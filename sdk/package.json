@@ -1,0 +1,62 @@
+{
+	"name": "@partnrup/helios-sdk",
+	"version": "0.1.0",
+	"description": "Typed Node.js client for the Helios encoding and post-processing API",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"import": {
+				"types": "./dist/index.d.ts",
+				"default": "./dist/index.js"
+			},
+			"require": {
+				"types": "./dist/index.d.cts",
+				"default": "./dist/index.cjs"
+			}
+		},
+		"./admin": {
+			"import": {
+				"types": "./dist/admin.d.ts",
+				"default": "./dist/admin.js"
+			},
+			"require": {
+				"types": "./dist/admin.d.cts",
+				"default": "./dist/admin.cjs"
+			}
+		}
+	},
+	"files": [
+		"dist",
+		"guides",
+		"README.md",
+		"AGENTS.md",
+		"llms.txt"
+	],
+	"engines": {
+		"node": ">=18.17"
+	},
+	"publishConfig": {
+		"access": "restricted"
+	},
+	"scripts": {
+		"prebuild": "node scripts/copy-guides.mjs",
+		"build": "tsup",
+		"test:dist": "tsup && node test/dist/run.mjs",
+		"check:examples": "tsc -p tsconfig.examples.json && node scripts/check-snippets.mjs",
+		"docs": "typedoc"
+	},
+	"dependencies": {
+		"zod": "^4.6.7"
+	},
+	"devDependencies": {
+		"@helios/contracts": "0.1.0",
+		"@types/aws-lambda": "8.10.164",
+		"@types/express": "5.0.6",
+		"express": "5.2.1",
+		"tsup": "^8.5.1",
+		"typedoc": "0.28.20"
+	}
+}

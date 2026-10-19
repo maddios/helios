@@ -13,3 +13,4 @@ export * from "./errors";
 export * from "./webhooks";
 export * from "./api";
 export * from "./destinations";
+export * from "./images";

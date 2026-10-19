@@ -1,5 +1,5 @@
 import { ImageError, type ImageErrorCode } from "./errors";
-import { canonicalParams, parseImageParams } from "./params";
+import { canonicalParams, checkImageTransform, parseImageParams } from "./params";
 import { assertTransformableKey } from "./transformableKey";
 import type { ImageTransform } from "./types";
 
@@ -16,6 +16,19 @@ export type ImageRoute =
 
 export function canonicalPath(key: string, transform: ImageTransform): string {
 	return `${IMG_PREFIX}${canonicalParams(transform)}/${key}`;
+}
+
+/**
+ * Builds the canonical path of a transform after checking the key and every value.
+ *
+ * @param key Transformable storage key.
+ * @param transform Transform to check and canonicalise.
+ * @returns The canonical `/img/<params>/<key>` path.
+ * @throws {ImageError} When the key or the transform is invalid.
+ */
+export function checkedCanonicalPath(key: string, transform: ImageTransform): string {
+	assertTransformableKey(key);
+	return canonicalPath(key, checkImageTransform(transform));
 }
 
 export function rewrittenPath(key: string, transform: ImageTransform): string {

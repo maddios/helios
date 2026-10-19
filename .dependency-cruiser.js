@@ -35,6 +35,13 @@ module.exports = {
 			to: { path: "^(core|contracts)/src/(?!index\\.ts$|[^/]+/index\\.ts$|api/index\\.ts$)" }
 		},
 		{
+			name: "sdk-imports-contracts-only",
+			comment: "sdk/ is server-agnostic: it imports contracts, never core, api, worker or other services",
+			severity: "error",
+			from: { path: "^sdk/" },
+			to: { path: "^(core|api|worker|functions|local|scripts)/" }
+		},
+		{
 			name: "contracts-is-a-leaf",
 			severity: "error",
 			from: { path: "^contracts/" },

@@ -13,6 +13,9 @@
 		"functions/src",
 		"functions/test",
 		"local",
-		"scripts"
-	]
+		"scripts",
+		"sdk/src",
+		"sdk/test"
+	],
+	"exclude": ["sdk/test/dist"]
 }

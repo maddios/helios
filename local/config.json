@@ -12,7 +12,7 @@
 	"mediaBucket": "helios-local-media",
 	"cdnBaseUrl": "http://localhost:4566/helios-local-media",
 	"cdnMode": "recording",
-	"uploadUrlExpirySec": 900,
+	"uploadUrlExpirySec": 21600,
 	"maxUploadBytes": 10737418240,
 	"lambdaMaxDurationSec": 180,
 	"lambdaMaxSourceBytes": 524288000,

@@ -1,0 +1,26 @@
+# Helios SDK (@partnrup/helios-sdk)
+
+> Typed, server-side Node.js client for the Helios encoding and AI post-processing API. Encodes media from S3 sources, uploads or URLs with named presets, and delivers signed webhook or EventBridge events when requests finish. Built on fetch, with typed errors and retry rules per method. Import the account client from "@partnrup/helios-sdk" and the operator client from "@partnrup/helios-sdk/admin".
+
+Use this package only on a server: it holds an account API key. Verify webhooks on the raw request body with `helios.webhooks.verify`. Dedupe events on `id`.
+
+## Docs
+
+- [README](./README.md): install, quickstart with webhook verification in Express, one recipe per task (source encode, analysis mode, translations, transcripts, scenes and stills, image URLs, presets, re-encode, cancel, purge, destinations, usage, errors, admin).
+- [AGENTS](./AGENTS.md): agent reference. Method selection table, method index with parameters and returns, event catalogue, idempotency and retry rules, status codes, limits, and integration checklists for bella and novel.
+- [Webhooks guide](./guides/webhooks.md): headers, signature verification, idempotency, ordering, retries, redelivery and the `helios.test` event.
+- [EventBridge guide](./guides/eventbridge.md): bus setup, resource policy, destination configuration, rules and troubleshooting.
+
+## Key entry points
+
+- `new Helios({ apiKey, baseUrl, imageBaseUrl?, webhookSecret?, maxRetries?, timeoutMs? })`: account client with resources `encodes`, `assets`, `requests`, `uploads`, `files`, `presets`, `destinations`, `account`, `usage`, plus `webhooks` and `images`.
+- `helios.uploads.uploadAndEncode(input, { preset, ... })`: store a file, then encode it. Returns `{ uploadKey, request }`.
+- `helios.requests.wait(id, { timeoutMs? })`: poll until COMPLETE, ERROR or CANCELLED.
+- `helios.webhooks.verify(rawBody, signatureHeader)`: check the signature and parse a typed `WebhookEvent`.
+- `helios.webhooks.eventBridgeDetail(event)`: parse an EventBridge event's `detail` into a `WebhookEvent`.
+- `helios.images.url(key, { w, h, c, g, b, q, f }, version?)`: canonical image URL. Pure.
+- `new HeliosAdmin({ apiKey: "sk_admin_...", baseUrl })` from "@partnrup/helios-sdk/admin": accounts, keys, system presets, usage and destination tests.
+
+## Optional
+
+- [Examples](./README.md#recipes): every README snippet is a verbatim run of a type-checked example in the source repository.

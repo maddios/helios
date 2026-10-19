@@ -35,7 +35,10 @@ const baseSchema = z
 		INGEST_TIMEOUT_SEC: z.coerce.number().int().positive(),
 		SCALER_NOTIFY_MIN_INTERVAL_MS: z.coerce.number().int().nonnegative(),
 		FANOUT_RESUME_AFTER_SEC: z.coerce.number().int().positive(),
-		HELIOS_AWS_ACCOUNT_ID: z.string().regex(/^\d{12}$/)
+		HELIOS_AWS_ACCOUNT_ID: z.string().regex(/^\d{12}$/),
+		IMAGE_BASE_URL: z.url(),
+		IMAGE_MAX_SOURCE_BYTES: z.coerce.number().int().positive(),
+		IMAGE_MAX_INPUT_PIXELS: z.coerce.number().int().positive()
 	})
 	.superRefine((value, ctx) => {
 		if (value.STAGE !== "local" && value.SSRF_ALLOWED_HOSTS.length > 0) {
@@ -47,7 +50,12 @@ const baseSchema = z
 		}
 	});
 
-const schema = z.intersection(baseSchema, scalerNotifySchema);
+const cdnSchema = z.discriminatedUnion("CDN_MODE", [
+	z.object({ CDN_MODE: z.literal("recording") }),
+	z.object({ CDN_MODE: z.literal("cloudfront"), CDN_DISTRIBUTION_ID: z.string().min(1) })
+]);
+
+const schema = z.intersection(baseSchema, z.intersection(scalerNotifySchema, cdnSchema));
 
 export type Config = z.infer<typeof schema>;
 

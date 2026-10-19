@@ -1,0 +1,186 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Helios media CDN (S3 media origin, /img/* transform origin group, invalidation-friendly cache policy)
+
+Parameters:
+  Stage:
+    Type: String
+    AllowedValues: [dev, prod]
+  MediaBucketName:
+    Type: String
+  ImageFunctionArn:
+    Type: String
+  ImageFunctionUrl:
+    Type: String
+    Description: AWS_IAM Function URL of the image Lambda, for example https://abc.lambda-url.us-east-2.on.aws/
+  PriceClass:
+    Type: String
+    Default: PriceClass_100
+    AllowedValues: [PriceClass_100, PriceClass_200, PriceClass_All]
+  Aliases:
+    Type: String
+    Default: ""
+    Description: Comma-separated alternate domain names. Requires CertificateArn.
+  CertificateArn:
+    Type: String
+    Default: ""
+    Description: ACM certificate in us-east-1 for Aliases. Empty uses the default CloudFront certificate.
+
+Conditions:
+  HasAliases: !Not [!Equals [!Ref Aliases, ""]]
+  HasCertificate: !Not [!Equals [!Ref CertificateArn, ""]]
+
+Resources:
+  MediaOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub helios-${Stage}-media-oac
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ImageOriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub helios-${Stage}-image-oac
+        OriginAccessControlOriginType: lambda
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  ImageRewriteFunction:
+    Type: AWS::CloudFront::Function
+    Properties:
+      Name: !Sub helios-${Stage}-img-rewrite
+      AutoPublish: true
+      FunctionConfig:
+        Comment: Canonicalizes /img/<params>/<key> to /<key>/_img/<params>
+        Runtime: cloudfront-js-2.0
+      FunctionCode: |
+        __IMG_REWRITE_SOURCE__
+
+  CachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: !Sub helios-${Stage}-media
+        DefaultTTL: 2592000
+        MaxTTL: 31536000
+        MinTTL: 0
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          QueryStringsConfig:
+            QueryStringBehavior: whitelist
+            QueryStrings: [v]
+          HeadersConfig:
+            HeaderBehavior: none
+          CookiesConfig:
+            CookieBehavior: none
+
+  Distribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub helios-${Stage} media CDN
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        PriceClass: !Ref PriceClass
+        Aliases: !If [HasAliases, !Split [",", !Ref Aliases], !Ref AWS::NoValue]
+        ViewerCertificate: !If
+          - HasCertificate
+          - AcmCertificateArn: !Ref CertificateArn
+            SslSupportMethod: sni-only
+            MinimumProtocolVersion: TLSv1.2_2021
+          - CloudFrontDefaultCertificate: true
+        Origins:
+          - Id: media
+            DomainName: !Sub ${MediaBucketName}.s3.${AWS::Region}.amazonaws.com
+            OriginAccessControlId: !Ref MediaOriginAccessControl
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: mediaVariants
+            DomainName: !Sub ${MediaBucketName}.s3.${AWS::Region}.amazonaws.com
+            OriginPath: /resize_cache
+            OriginAccessControlId: !Ref MediaOriginAccessControl
+            S3OriginConfig:
+              OriginAccessIdentity: ""
+          - Id: imageLambda
+            DomainName: !Select [2, !Split ["/", !Ref ImageFunctionUrl]]
+            OriginAccessControlId: !Ref ImageOriginAccessControl
+            CustomOriginConfig:
+              OriginProtocolPolicy: https-only
+              OriginSSLProtocols: [TLSv1.2]
+        OriginGroups:
+          Quantity: 1
+          Items:
+            - Id: imageGroup
+              FailoverCriteria:
+                StatusCodes:
+                  Quantity: 2
+                  Items: [403, 404]
+              Members:
+                Quantity: 2
+                Items:
+                  - OriginId: mediaVariants
+                  - OriginId: imageLambda
+        DefaultCacheBehavior:
+          TargetOriginId: media
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods: [GET, HEAD]
+          CachePolicyId: !Ref CachePolicy
+          Compress: true
+        CacheBehaviors:
+          - PathPattern: img/*
+            TargetOriginId: imageGroup
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods: [GET, HEAD]
+            CachePolicyId: !Ref CachePolicy
+            Compress: true
+            FunctionAssociations:
+              - EventType: viewer-request
+                FunctionARN: !GetAtt ImageRewriteFunction.FunctionMetadata.FunctionARN
+
+  MediaBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref MediaBucketName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource:
+              - !Sub arn:${AWS::Partition}:s3:::${MediaBucketName}/*/media/*
+              - !Sub arn:${AWS::Partition}:s3:::${MediaBucketName}/*/files/*
+              - !Sub arn:${AWS::Partition}:s3:::${MediaBucketName}/resize_cache/*
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  ImageFunctionUrlPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunctionUrl
+      FunctionName: !Ref ImageFunctionArn
+      FunctionUrlAuthType: AWS_IAM
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+  ImageFunctionInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ImageFunctionArn
+      Principal: cloudfront.amazonaws.com
+      SourceArn: !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/${Distribution}
+
+Outputs:
+  DistributionId:
+    Value: !Ref Distribution
+  DomainName:
+    Value: !GetAtt Distribution.DomainName

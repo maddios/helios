@@ -17,7 +17,7 @@ import {
 import { S3ServiceException } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { ObjectStore } from "./types";
+import type { ObjectInfo, ObjectStore } from "./types";
 
 const DELETE_BATCH_SIZE = 1000;
 
@@ -77,6 +77,32 @@ export class S3ObjectStore implements ObjectStore {
 		await this.client.send(
 			new PutObjectCommand({ Bucket: this.mediaBucket, Key: key, Body: body, ContentType: contentType })
 		);
+	}
+
+	async uploadBuffer(key: string, body: Buffer, contentType: string, cacheControl: string): Promise<void> {
+		await this.client.send(
+			new PutObjectCommand({
+				Bucket: this.mediaBucket,
+				Key: key,
+				Body: body,
+				ContentType: contentType,
+				CacheControl: cacheControl
+			})
+		);
+	}
+
+	async objectInfo(key: string): Promise<ObjectInfo | undefined> {
+		try {
+			const { ContentLength = 0, ETag = "" } = await this.client.send(
+				new HeadObjectCommand({ Bucket: this.mediaBucket, Key: key })
+			);
+			return { size: ContentLength, etag: ETag };
+		} catch (err) {
+			if (err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404) {
+				return undefined;
+			}
+			throw err;
+		}
 	}
 
 	async downloadBuffer(key: string, signal?: AbortSignal): Promise<Buffer> {

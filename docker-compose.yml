@@ -53,3 +53,13 @@ services:
     volumes:
       - ./local:/app/local:ro
     command: ["npx", "tsx", "local/lambdaRunner.ts"]
+  helios-img:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      target: test
+    init: true
+    network_mode: host
+    volumes:
+      - ./local:/app/local:ro
+    command: ["npx", "tsx", "local/imageEdge.ts"]

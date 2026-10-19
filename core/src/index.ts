@@ -15,6 +15,7 @@ export * from "./usage";
 export * from "./callbacks";
 export * from "./destinations";
 export * from "./cdn";
+export * from "./images";
 export * from "./analyze";
 export * from "./intake";
 export * from "./scaler";

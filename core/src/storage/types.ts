@@ -1,11 +1,18 @@
 import type { Readable } from "node:stream";
 
+export interface ObjectInfo {
+	size: number;
+	etag: string;
+}
+
 export interface ObjectStore {
 	presignGet(bucket: string, key: string, expiresSec: number): Promise<string>;
 	headObject(bucket: string, key: string): Promise<boolean>;
 	uploadFile(key: string, filePath: string, contentType: string): Promise<number>;
 	uploadStream(key: string, body: Readable, contentType: string): Promise<number>;
 	uploadText(key: string, body: string, contentType: string): Promise<void>;
+	uploadBuffer(key: string, body: Buffer, contentType: string, cacheControl: string): Promise<void>;
+	objectInfo(key: string): Promise<ObjectInfo | undefined>;
 	listKeys(prefix: string): Promise<string[]>;
 	downloadBuffer(key: string, signal?: AbortSignal): Promise<Buffer>;
 	deleteKeys(keys: string[]): Promise<void>;

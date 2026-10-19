@@ -1,4 +1,12 @@
-import { db, ensureIndexes, objectStore, pipelineItems, UsageMeter, type PipelineItem } from "@helios/core";
+import {
+	cdnInvalidations,
+	db,
+	ensureIndexes,
+	objectStore,
+	pipelineItems,
+	UsageMeter,
+	type PipelineItem
+} from "@helios/core";
 import { purgeHandler } from "../../src/handlers/purge";
 import type { HandlerContext } from "../../src/handlers/types";
 import { resetDb, startMongo, stopMongo } from "../../../core/test/helpers/mongo";
@@ -18,10 +26,16 @@ const ASSET = {
 
 function fakeStore(initialKeys: string[]) {
 	const keys = new Set(initialKeys);
+	const log: string[] = [];
 	return {
 		keys,
-		listKeys: jest.fn(async (prefix: string) => [...keys].filter((key) => key.startsWith(prefix))),
+		log,
+		listKeys: jest.fn(async (prefix: string) => {
+			log.push(`list ${prefix}`);
+			return [...keys].filter((key) => key.startsWith(prefix));
+		}),
 		deleteKeys: jest.fn(async (toDelete: string[]) => {
+			log.push(`delete ${toDelete.join(",")}`);
 			toDelete.forEach((key) => keys.delete(key));
 		})
 	};
@@ -60,6 +74,7 @@ describe("purge handler", () => {
 		const store = fakeStore([
 			`${SLUG}/media/asset-1/mp4_360.mp4`,
 			`${SLUG}/media/asset-1/tmb/0001.jpg`,
+			`resize_cache/${SLUG}/media/asset-1/_img/w_100/tmb/0001.jpg`,
 			`${SLUG}/sources/asset-1/original`,
 			`${SLUG}/uploads/up-1`,
 			`${SLUG}/media/asset-2/mp4_360.mp4`
@@ -69,9 +84,27 @@ describe("purge handler", () => {
 		await purgeHandler(contextFor());
 
 		expect([...store.keys]).toEqual([`${SLUG}/media/asset-2/mp4_360.mp4`]);
+		expect(await cdnInvalidations().findOne({ _id: `${PURGE_REQUEST}:purge` })).toEqual(
+			expect.objectContaining({ paths: [`/${SLUG}/media/asset-1/*`], status: "PENDING" })
+		);
 		expect(await db().collection("transcripts").countDocuments({})).toBe(1);
 		expect(await db().collection("scene_analyses").countDocuments({})).toBe(0);
 		expect((await pipelineItems().find({}).toArray()).map((item) => item._id)).toEqual([`${PURGE_REQUEST}:purge`]);
+	});
+
+	it("deletes originals before listing and deleting the resize cache", async () => {
+		const store = fakeStore([
+			`${SLUG}/media/asset-1/mp4_360.mp4`,
+			`resize_cache/${SLUG}/media/asset-1/_img/w_100/tmb/0001.jpg`
+		]);
+		jest.mocked(objectStore).mockReturnValue(store as never);
+
+		await purgeHandler(contextFor());
+
+		expect(store.log.indexOf(`delete ${SLUG}/media/asset-1/mp4_360.mp4`)).toBeLessThan(
+			store.log.indexOf(`list resize_cache/${SLUG}/media/asset-1/`)
+		);
+		expect(store.keys.size).toBe(0);
 	});
 
 	it("throws while another item of the asset holds a fresh lease", async () => {

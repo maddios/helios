@@ -5,6 +5,7 @@ import { summarizeUsage } from "./usageSummary";
 import { loadItems, recordItemUnits, settledUnits, storeReportOnce } from "./unitsLedger";
 import { OPEN_REQUEST_STATUSES } from "./types";
 import { toReportItems } from "./reportItems";
+import { refreshReencodedAsset } from "./refreshReencodedAsset";
 
 export interface RequestOutcome {
 	status?: RequestStatus;
@@ -28,6 +29,9 @@ export async function finalizeRequest(
 	const report = await jobReports().findOne({ _id: request._id });
 	if (report === null) {
 		throw new Error(`Job report for request ${request._id} is missing after finalize`);
+	}
+	if (request.mode === "reencode" && report.status === "COMPLETE") {
+		await refreshReencodedAsset(request);
 	}
 	await recordLateUnits(request._id);
 	await sendCallback({ type: "request", requestId: request._id }, `${request._id}:final`);

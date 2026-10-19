@@ -57,4 +57,5 @@ COPY contracts contracts
 COPY core core
 COPY worker worker
 COPY functions functions
+COPY infra/edge infra/edge
 CMD ["npx", "jest", "-c", "jest.golden.config.js"]

@@ -25,6 +25,18 @@ describe("config", () => {
 		});
 	});
 
+	it("requires a CDN_MODE that is cloudfront or recording", () => {
+		process.env.CDN_MODE = "cdn";
+		resetConfigForTests();
+		expect(() => config()).toThrow(/CDN_MODE/);
+	});
+
+	it("requires CDN_DISTRIBUTION_ID in cloudfront mode", () => {
+		process.env.CDN_MODE = "cloudfront";
+		resetConfigForTests();
+		expect(() => config()).toThrow(/CDN_DISTRIBUTION_ID/);
+	});
+
 	it("parses SQS_FAIR_QUEUES as a boolean", () => {
 		process.env.SQS_FAIR_QUEUES = "false";
 		resetConfigForTests();

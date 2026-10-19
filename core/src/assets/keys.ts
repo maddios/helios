@@ -4,6 +4,10 @@ export function assetPrefix(slug: string, assetId: string): string {
 	return `${slug}/media/${assetId}/`;
 }
 
+export function resizeCachePrefix(slug: string, assetId: string): string {
+	return `resize_cache/${assetPrefix(slug, assetId)}`;
+}
+
 export function outputKey(slug: string, assetId: string, template: string): string {
 	return `${assetPrefix(slug, assetId)}${template.replaceAll("{id}", assetId)}`;
 }

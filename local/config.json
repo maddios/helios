@@ -11,6 +11,7 @@
 	"e2eQueuePrefix": "helios-e2e",
 	"mediaBucket": "helios-local-media",
 	"cdnBaseUrl": "http://localhost:4566/helios-local-media",
+	"cdnMode": "recording",
 	"uploadUrlExpirySec": 900,
 	"maxUploadBytes": 10737418240,
 	"lambdaMaxDurationSec": 180,
@@ -80,6 +81,11 @@
 		"shutdownDrainSec": 25,
 		"redeliverCooldownSec": 60,
 		"destinationTestCooldownSec": 60
+	},
+	"img": {
+		"port": 3300,
+		"maxSourceBytes": 104857600,
+		"maxInputPixels": 50000000
 	},
 	"openai": {
 		"apiKeySource": "mock",

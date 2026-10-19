@@ -4,3 +4,4 @@ coverage/
 .cache/
 .env
 *.log
+infra/cdn.rendered.yml

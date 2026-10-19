@@ -15,6 +15,7 @@ const schema = z.object({
 	e2eQueuePrefix: z.string().min(1),
 	mediaBucket: z.string().min(1),
 	cdnBaseUrl: z.url(),
+	cdnMode: z.literal("recording"),
 	uploadUrlExpirySec: z.number().int().positive(),
 	maxUploadBytes: z.number().int().positive(),
 	sourceBucket: z.string().min(1),
@@ -83,6 +84,11 @@ const schema = z.object({
 		maxIngestBytes: z.number().int().positive(),
 		ingestTimeoutSec: z.number().int().positive()
 	}),
+	img: z.object({
+		port: z.number().int().positive(),
+		maxSourceBytes: z.number().int().positive(),
+		maxInputPixels: z.number().int().positive()
+	}),
 	ssrfAllowedHosts: z.string(),
 	callbackTimeoutSec: z.number().int().positive(),
 	lambdas: z.object({
@@ -132,8 +138,12 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		S3_ENDPOINT: config.awsEndpoint,
 		EVENTBRIDGE_ENDPOINT: config.awsEndpoint,
 		HELIOS_AWS_ACCOUNT_ID: config.heliosAwsAccountId,
+		IMAGE_BASE_URL: `http://localhost:${config.img.port}`,
+		IMAGE_MAX_SOURCE_BYTES: String(config.img.maxSourceBytes),
+		IMAGE_MAX_INPUT_PIXELS: String(config.img.maxInputPixels),
 		MEDIA_BUCKET: config.mediaBucket,
 		CDN_BASE_URL: config.cdnBaseUrl,
+		CDN_MODE: config.cdnMode,
 		UPLOAD_URL_EXPIRY_SEC: String(config.uploadUrlExpirySec),
 		MAX_UPLOAD_BYTES: String(config.maxUploadBytes),
 		MONGO_URI: config.mongoUri,

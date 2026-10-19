@@ -11,6 +11,7 @@ import { usageDailyIndexes } from "./usageDaily";
 import { transcriptIndexes } from "./transcripts";
 import { sceneAnalysisIndexes } from "./sceneAnalyses";
 import { callbackDeliveryIndexes } from "./callbackDeliveries";
+import { cdnInvalidationIndexes } from "./cdnInvalidations";
 
 export * from "./accounts";
 export * from "./apiKeys";
@@ -23,6 +24,7 @@ export * from "./usageDaily";
 export * from "./transcripts";
 export * from "./sceneAnalyses";
 export * from "./callbackDeliveries";
+export * from "./cdnInvalidations";
 
 const indexesByCollection: Record<string, IndexDescription[]> = {
 	accounts: accountIndexes,
@@ -35,7 +37,8 @@ const indexesByCollection: Record<string, IndexDescription[]> = {
 	usage_daily: usageDailyIndexes,
 	transcripts: transcriptIndexes,
 	scene_analyses: sceneAnalysisIndexes,
-	callback_deliveries: callbackDeliveryIndexes
+	callback_deliveries: callbackDeliveryIndexes,
+	cdn_invalidations: cdnInvalidationIndexes
 };
 
 export async function ensureIndexes(): Promise<void> {

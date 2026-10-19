@@ -333,7 +333,7 @@ Person = { species|null, genderPresentation|null, approximateAge|null (range, e.
 7. **API keys:** `sk_live_` keys stored as SHA-256 with an indexed lookup.
 8. **One URL scheme:**
    - Keys: `{slug}/media/{assetId}/…`, `{slug}/files/…`.
-   - CDN: `?v=` with only `v` allow-listed. Outputs use stable keys, so a re-encode overwrites them in place. Step 7 adds a CloudFront invalidation of `/{slug}/media/{assetId}/*` after a re-encode finalizes. Not built yet.
+   - CDN: `?v=` with only `v` allow-listed. Outputs use stable keys, so a re-encode overwrites them in place. Step 7 adds a CloudFront invalidation of `/{slug}/media/{assetId}/*` after a re-encode finalizes (built, see step 7 deviations).
    - Images: `/img/w_,h_,q_,f_,c_pad,b_HEX/{key}` (replaces icarus `?width&height&background_fill`).
 9. **`POST /files`** for raw uploads. **Multipart presigned uploads** for large files (replaces icarus `sign_auth` + Evaporate): `POST /uploads/multipart` (create, returns `uploadId` + part URLs), `POST /uploads/multipart/:uploadId/complete`, `DELETE /uploads/multipart/:uploadId`. Same flow as bella's `cloud/kodak.ts` multipart functions.
 10. **Image transforms run on a regional Lambda origin**, which avoids Lambda@Edge's 1 MB limit, us-east-1 deploys and lack of env vars.
@@ -371,7 +371,7 @@ Person = { species|null, genderPresentation|null, approximateAge|null (range, e.
   - Dockerfile (ffmpeg x264/x265/vpx/opus/aac/mp3lame) and the tiered SQS poll loop with visibility heartbeat.
   - Step handlers by kind: mp4, stills, mp3, image, `transcribe`, `scenes`.
   - `ai/prompts/` and the SRT/VTT utilities.
-- `infra/init.yml`: S3, CloudFront (+ `/img/*` origin group, cache policy, OAC for S3 and the Lambda URL).
+- `infra/cdn.yml`: S3 media origin, CloudFront (+ `/img/*` origin group, cache policy, OAC for S3 and the Lambda URL), and the edge function from `infra/edge/imgRewrite.js`.
 - `sdk/`: `@partnrup/helios-sdk` with types for assets, transcripts, scenes and callbacks, plus docs. Types come from `contracts/`; the SDK never depends on `core`.
 - `scripts/`: seed-account, seed-presets, sample-cloudinary-outputs, cloudinary-download (Phase 3).
 
@@ -956,6 +956,71 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - **Summary people.** Windowed summaries take `people` from the union of the scene people in code. The model writes only the summary text for windowed analyses.
 - **Input errors.** Items store an error string, not a code, so a SKIPPED scene analysis (no stills) carries its message in `error`.
 
+## Step 7 design: image transforms + CDN
+
+**URL:** `/img/<params>/<key>`.
+- **params:** comma-separated, in canonical order. `w_<1-4096>`, `h_<1-4096>`, `q_<1-100>`, `f_<jpg|png|webp|avif>`, `c_<pad|fit|fill|limit>`, `b_<RRGGBB>` (pad background), `g_<center|north|south|east|west|northeast|northwest|southeast|southwest>` (fill gravity).
+- **Rules:** at least one of `w`/`h`. Unknown, duplicate or out-of-range params return 400. Non-canonical order returns a **301 to the canonical URL**, so every image has one cache key. No `f_auto` (explicit format only). `c_fit` is the default, so the canonical form omits it: `w_100,c_fit` 301s to `w_100` (core and edge alike).
+- **key:** the account slug is `[a-z0-9-]+`, then `media` or `files`, then segments of `[A-Za-z0-9._-]+`. Any `sources` or `uploads` segment, `.` or `..` returns 400. Percent-encoding, slashes inside a segment and unicode are rejected, so `%2e%2e`, `%2F` and `ü` never reach S3. A key may contain `_img` (the rewrite marker is parsed from the last `/_img/`).
+
+**Edge routing:** a CloudFront Function on viewer-request for `/img/*` validates and canonicalizes the path, then rewrites `/img/<params>/<key>` to `/<key>/_img/<params>`. The cache key becomes the rewritten URI (plus `v` only).
+
+**Origin group** for `/img/*`, both origins signed with OAC:
+1. **Primary:** S3 media bucket with origin path `/resize_cache`, so a cached variant lives at `resize_cache/<key>/_img/<params>`.
+2. **Failover on 403/404:** the **image Lambda** Function URL (us-east-2).
+
+**Image Lambda (`functions/src/image/`, sharp):**
+1. Parse the rewritten URI and re-validate it, without trusting the edge.
+2. HeadObject the original. A missing original returns 404, and so does one whose key is denied.
+3. Enforce `IMAGE_MAX_SOURCE_BYTES` and sharp `limitInputPixels`, and apply EXIF `rotate()`. Sources are limited to the raster allowlist (jpeg, png, webp, avif, gif, tiff). Anything else, SVG included, returns 415 `unsupported_source_format`. AVIF is recognised from sharp's `heif` + `av1` metadata.
+4. Transform: `fit` → `inside`, `fill` → `cover` with gravity, `limit` → `inside` with `withoutEnlargement`, `pad` → `contain` with background.
+5. Encode to `f` (or keep the source format) at `q`. JPG output flattens alpha onto white first. `q` on PNG enables sharp's palette quantisation, which is lossy. Without `q`, PNG stays lossless.
+6. Write the variant to `resize_cache/...` with Content-Type and long immutable `Cache-Control`. Then HeadObject the original again. If it is missing or its ETag changed, delete the variant and return 404 `no-store`. Otherwise return the bytes base64-encoded in the Function URL response. A base64 body over 6 MB - 64 KB returns `302 Location: /img/<canonical>[?v=]` with `no-store`. The S3 primary serves that variant on the follow-up request.
+
+**CDN invalidation (`core/src/cdn`):** finalize and purge only enqueue. `enqueueInvalidation(paths, callerReference)` upserts a `cdn_invalidations` document `{ _id: callerReference, paths, status: PENDING|SENT|FAILED, attempts, createdAt, sentAt }`, so a repeat is a no-op. `drainCdnInvalidations(now)` sends the queue. It runs in the scaler handler alongside the scaler and the resumer (errors aggregated), and in the local runner on the resumer schedule.
+- The drainer sends nothing while `ListInvalidations` reports an `InProgress` invalidation. Otherwise it coalesces the oldest PENDING documents into one `CreateInvalidation` with unique paths, at most 3000 paths and 15 wildcard paths. Only one invalidation is in flight at a time, so the 15-wildcard limit holds. The CallerReference is `drain-<sha256 of the sorted ids>`.
+- `TooManyInvalidationsInProgress` leaves the documents PENDING for the next run. Other errors increment `attempts`, and a document becomes FAILED at 5 attempts.
+- `RecordingCdn` reports nothing in progress and marks documents SENT.
+- **Re-encode finalize** (stable keys were overwritten): `finalizeRequest` runs after the re-encoded outputs are written. It deletes `resize_cache/{slug}/media/{assetId}/`, then queues `/{slug}/media/{assetId}/*`. A render that raced the overwrite fails the ETag check above.
+- **Purge:** deletes the originals first (media, sources, and the upload key), then lists and deletes `resize_cache/{slug}/media/{assetId}/`, then queues `/{slug}/media/{assetId}/*` only. Sources and uploads are never served by the CDN, so they are not invalidated.
+- **Raw file delete/overwrite** (`/files`) queues that key's directory prefix.
+
+**URL builders:** `imageUrl(key, transform, version?)` in core (canonical params) and in the SDK. The API returns `images` helpers only where useful: stills and image outputs get a `thumbnailUrl` example in docs, with no per-variant fields.
+
+**Local:** `local/imageEdge.ts` (`helios-img` compose service, host network):
+- An Express server emulates the CloudFront Function and the origin group: canonicalize/rewrite, then S3 `resize_cache` GET from LocalStack, falling back to invoking the real image Lambda handler with a Function-URL-shaped event. It passes the 302 through to the client, as CloudFront does.
+- The local `Cdn` implementation records invalidations so e2e tests can assert on them.
+- `IMAGE_BASE_URL` comes from `local/config.json`.
+
+**Infra (authored now, deployed in step 9):** `infra/cdn.yml` (CloudFormation): distribution, behaviors (default → S3 media, `/img/*` → origin group), the cache policy (query string `v` only), the CloudFront Function code (`infra/edge/imgRewrite.js`, shared with the local emulator so both canonicalize identically), OAC for S3 + Lambda URL, and the Lambda permissions. It's validated with `cfn-lint` when available.
+
+**Image transform deviations (as built, 2026-10-19):**
+- **Canonical order** is `w,h,c,g,b,q,f`. The parameter list above is not ordered, so this order is fixed here. Core and the edge function both use it.
+- **Defaults and rules:** `c` defaults to `fit` (sharp `inside`), and `c_fit` is omitted from the canonical form. `b` requires `c_pad`, and `g` requires `c_fill`. Other combinations return 400 `not_applicable`. `b` is lowercase hex only, so `FF0000` is 400.
+- **Padding:** `pad` with `b` uses that colour. Without `b`, JPG pads white and PNG, WebP and AVIF pad transparent. JPG output flattens any source alpha onto white.
+- **Format:** a source without an encoder (gif, tiff) needs an explicit `f`, or the request returns 415 `format_required`. `f_auto` stays invalid.
+- **Errors:** 400 for params, keys and order (the body carries the `code`). 404 for a missing original, or one that changed or vanished during the render (the variant is removed). 413 when the original exceeds `IMAGE_MAX_SOURCE_BYTES`. 415 for bytes that are not an image, and for unsupported source formats. 422 when the source exceeds `IMAGE_MAX_INPUT_PIXELS` or sharp fails.
+- **Inline limit:** the threshold is 6 MB - 64 KB and applies to the base64 body, which is what Lambda counts. Variants over it get a 302 to the canonical `/img` URL (keeping `v`), with `no-store`.
+- **Config:** `IMAGE_BASE_URL`, `IMAGE_MAX_SOURCE_BYTES` and `IMAGE_MAX_INPUT_PIXELS` are required in core config. Local uses `img` in `local/config.json` (port 3300, 100 MB, 50 Mpx), and the test env sets them in `core/test/env.ts`.
+- **Storage:** `ObjectStore` gained `uploadBuffer` and `objectInfo` (HeadObject, `{ size, etag }`, `undefined` when missing). Only 404 maps to missing, so a 403 is an error and the Lambda returns 500.
+- **Image Lambda:** `imageHandler` is exported from `functions/src`, and `npm run build:image` bundles it with sharp external. Its container and Function URL are step 9.
+- **Local edge:** `local/imageEdge.ts` (compose `helios-img`) passes the 302 through, and the e2e client follows it. It counts handler invocations, so tests can assert that a cache hit skips the handler. Non-200 responses never carry immutable cache headers.
+
+**Step 7 deviations (as built, 2026-10-19):**
+- **Config:** `CDN_MODE` is required (`cloudfront` | `recording`, no default). `CDN_DISTRIBUTION_ID` is required only in `cloudfront` mode. Local and the test env use `recording` (`cdnMode` in `local/config.json`). The CloudFront client signs for `us-east-1`, the global control-plane region.
+- **Queue:** replaces inline invalidation (see the CDN invalidation section). `batchPaths` is gone, and the drainer does the coalescing.
+- **Re-encode:** `finalizeRequest` refreshes the variants for `reencode` + `COMPLETE` before the final callback, so consumers never see the old cache. Only the finalizer that empties `pendingItems` reaches this point. A rerun is safe: the S3 delete is over listed keys, and the queue dedupes on its reference.
+- **Purge:** the handler deletes the originals first, then the `resize_cache/{slug}/media/{assetId}/` variants, then queues `/{slug}/media/{assetId}/*`. CallerReference is `${requestId}:purge`.
+- **Raw files:** `invalidateFileKey(key, callerReference)` takes an explicit reference (repeated overwrites of one key need distinct references). It queues the key's directory prefix. No route calls it yet, because no raw-file overwrite or delete route exists and raw keys are UUID-unique.
+- **Template:** the path pattern is `img/*` (CloudFront patterns have no leading slash). Both `/img` and default behaviors use one cache policy (30-day default TTL, 1-year max, `v` as the only query key, no headers or cookies). There is no origin request policy, since the rewritten URI carries every parameter and `Host` is not forwarded by default. `AWS::S3::BucketPolicy` owns the media bucket's whole policy, so step 9 must not attach another policy to that bucket. Its Resource is limited to `*/media/*`, `*/files/*` and `resize_cache/*`.
+- **Lambda permissions:** two `AWS::Lambda::Permission` resources for the image function, both for `cloudfront.amazonaws.com` with the distribution as SourceArn: `lambda:InvokeFunctionUrl` (AWS_IAM) and `lambda:InvokeFunction`.
+- **Dependencies:** `@aws-sdk/client-cloudfront` (core). `js-yaml` and `@types/js-yaml` (root dev, template test).
+- **Step 9 deploy:**
+  - The Lambda Function URL must use `AuthType: AWS_IAM`. Run `npm run infra:cdn:render` and deploy `infra/cdn.rendered.yml`, never `infra/cdn.yml`, whose `FunctionCode` is a placeholder. The rendered file is gitignored. `cfn-lint` 1.57.2 passes on it.
+  - Verify both image function permissions (`lambda:InvokeFunctionUrl` and `lambda:InvokeFunction` for CloudFront Lambda origins) against current AWS docs before deploying.
+  - The image Lambda role needs `s3:ListBucket` on the media bucket. Without it, HeadObject returns 403 for a missing original rather than 404, and the request fails with a 500 instead of the 404 the handler intends. It also needs `s3:GetObject`, `s3:PutObject` on `resize_cache/*` and `s3:DeleteObject` on `resize_cache/*` (the mismatch cleanup).
+  - The scaler Lambda needs `CDN_MODE=cloudfront`, `CDN_DISTRIBUTION_ID`, and `cloudfront:ListInvalidations` and `cloudfront:CreateInvalidation`, or the drainer fails on every run.
+
 ## Local development & testing
 
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
@@ -1054,6 +1119,17 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 
 ## Implementation decisions log
 
+- **2026-10-19 (step 7 review fixes):**
+  - A (user): `c_fit` is the default, so the canonical form omits it in core and the edge. `w_100,c_fit` 301s to `w_100`.
+  - B: invalidations are queued in `cdn_invalidations` (PENDING, SENT, FAILED). Finalize and purge only enqueue. A drainer sends them in coalesced batches, one in flight at a time, with at most 15 wildcard paths. Throttling leaves documents PENDING.
+  - C/D: accepted deviations. The step 9 stack owns the media bucket.
+  - E: `q` on PNG enables palette quantisation (lossy). The behaviour is kept and documented.
+  - User: JPG output flattens alpha onto white and pads white unless `b` is given. PNG, WebP and AVIF keep transparency and pad transparent.
+  - Purge deletes originals before the variant listing. The image Lambda keeps the original's ETag, HEADs it again after the upload, and removes its variant when the original is gone or changed.
+  - The inline limit is 6 MB - 64 KB of base64. An oversize variant gets a 302 to its canonical URL, not a presigned URL.
+  - Keys are `[A-Za-z0-9._-]+` segments under a lowercase slug. Source formats are an allowlist, and SVG is rejected with 415.
+  - The bucket policy is scoped to media, files and resize_cache. Purge invalidates the asset media prefix only.
+  - The template adds `lambda:InvokeFunction` for CloudFront next to the Function URL permission.
 - **2026-10-19 (step 5b review fixes):**
   - D (user): a re-encode keeps the asset's language set. Only `encode` replaces it. Fresh natives regenerate every stored translation plus the requested ones.
   - A: `retranscribe` with `english: false` still regenerates an existing English track. The `english` description says so.
@@ -1231,3 +1307,11 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - No stills completes the scenes item SKIPPED with no SQS retries.
   - Prompt version is `scenes-v2`, edited in place in `worker/src/ai/prompts/scenes/v1.ts`.
 - **2026-10-19 (step 6 scenes):** scene detection is built as a pure builder in `worker/src/scenes/` (`analyzeScenes`, `analyzeImage`) with versioned prompts (`scenes-v1`). Each window is one `chatJson` call on a strict schema variant, and multi-window videos get a text-only summary call. Scenes are stitched at `continuesPrevious`, and the first scene starts at 0. Times and representative stills are validated against what the model was shown. People are off by account, and the schema omits them. Deviations from the spec are listed under "Step 6 deviations".
+- **2026-10-19:** image transforms use the core param set with explicit format only, canonicalized at the edge by a CloudFront Function rewrite to `/<key>/_img/<params>`. An S3 `resize_cache` primary falls back to the regional sharp Lambda URL, with OAC on both. Media and files keys only. Invalidation runs on re-encode finalize and on purge.
+- **2026-10-19 (step 7 CDN):** the `Cdn` adapter has a CloudFront implementation and a Mongo `RecordingCdn` for local and tests, selected by required `CDN_MODE`. Re-encode finalize and purge invalidate their asset prefixes, and purge also deletes the `resize_cache` variants. Re-encode finalize runs in `finalizeRequest` before the final callback. Its S3 delete and invalidation are idempotent, so a rerun records nothing new.
+- **2026-10-19 (step 7 infra):** `infra/cdn.yml` is authored with OAC on both origins and a viewer-request rewrite function. CloudFormation needs inline code, so `npm run infra:cdn:render` writes the gitignored `infra/cdn.rendered.yml` for step 9 deploys. The template is validated with `cfn-lint`, and a structural test checks the rendered output.
+- **2026-10-19 (step 7 image transforms):** the param grammar lives once in `core/src/images`. `infra/edge/imgRewrite.js` mirrors it in plain ES5, since CloudFront Functions cannot import modules. Core and the edge run one shared table, so they cannot drift.
+- **2026-10-19:** the canonical parameter order is `w,h,c,g,b,q,f`, and `c` defaults to `fit`. Non-canonical order is a 301 at the edge and a 400 in the Lambda, so every variant has one cache key.
+- **2026-10-19:** `b` and `g` are valid only with `c_pad` and `c_fill`, and `b` is lowercase hex only. Ignored parameters would give one output several cache keys, so they are rejected.
+- **2026-10-19:** source size and pixel limits are configuration (`IMAGE_MAX_SOURCE_BYTES`, `IMAGE_MAX_INPUT_PIXELS`, both required), not constants. The inline limit is measured on the base64 body.
+- **2026-10-19:** a source format without an encoder (gif, tiff) needs an explicit `f`. No fallback format is chosen silently.

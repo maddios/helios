@@ -10,6 +10,7 @@ import {
 	closeDb,
 	config as coreConfig,
 	dlqName,
+	drainCdnInvalidations,
 	fullQueueName,
 	initDb,
 	logger,
@@ -75,7 +76,8 @@ export async function runLambdaSources({
 			runSource(source, { ...base, timeoutSec: timeoutsSec[source.key] ?? local.lambdas.timeoutsSec[source.key] })
 		),
 		runLoop(signal, async () => {
-			await resumeStuckRequests(new Date());
+			const now = new Date();
+			await Promise.all([resumeStuckRequests(now), drainCdnInvalidations(now)]);
 			await sleep(local.lambdas.resumeIntervalSec * 1000, signal);
 		})
 	]);

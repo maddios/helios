@@ -1,5 +1,6 @@
 import type { ItemEventName, ItemStatus, RequestEventName, RequestStatus, WebhookEvent } from "@helios/contracts";
 import { jobReports, mediaAssets, pipelineItems, type PipelineItem, type PipelineRequest } from "../models";
+import { transcriptUrls } from "../transcripts";
 import { toAssetViews, toOutputViews, toRequestView } from "../views";
 
 const ITEM_EVENT_BY_STATUS: Partial<Record<ItemStatus, ItemEventName>> = {
@@ -38,6 +39,13 @@ export async function itemEnvelope(
 			item: toWebhookItem(item),
 			...(item.output?.assetOutputs !== undefined && {
 				outputs: toOutputViews(item.output.assetOutputs, request.assetVersion)
+			}),
+			...(item.output?.transcripts !== undefined && {
+				transcripts: item.output.transcripts.map(({ language, isTranslation, revision, keys }) => ({
+					language,
+					isTranslation,
+					urls: transcriptUrls(keys, revision)
+				}))
 			})
 		}
 	};

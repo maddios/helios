@@ -3,13 +3,18 @@ import { z } from "zod";
 export const ComputeTierSchema = z.enum(["lambda", "fargate"]).describe("Compute tier used");
 export type ComputeTier = z.infer<typeof ComputeTierSchema>;
 
+export const LlmUsageSchema = z.object({
+	model: z.string().describe("Model identifier of the LLM call"),
+	inputTokens: z.number().describe("LLM input tokens consumed"),
+	outputTokens: z.number().describe("LLM output tokens produced")
+});
+export type LlmUsage = z.infer<typeof LlmUsageSchema>;
+
 const UsageBaseSchema = z.object({
 	computeSec: z.number().describe("Compute time in seconds"),
 	outputBytes: z.number().optional().describe("Bytes produced as output"),
-	audioSec: z.number().optional().describe("Audio seconds processed"),
-	llmInputTokens: z.number().optional().describe("LLM input tokens consumed"),
-	llmOutputTokens: z.number().optional().describe("LLM output tokens produced"),
-	model: z.string().optional().describe("Model identifier used for LLM or transcription calls")
+	audioSec: z.number().optional().describe("Audio seconds transcribed"),
+	llm: z.array(LlmUsageSchema).optional().describe("LLM calls made by the attempt")
 });
 
 const LambdaUsageSchema = UsageBaseSchema.extend({
@@ -24,14 +29,7 @@ const FargateUsageSchema = UsageBaseSchema.extend({
 	spot: z.boolean().describe("Whether the attempt ran on spot capacity")
 });
 
-export const UsageSchema = z
-	.discriminatedUnion("computeTier", [LambdaUsageSchema, FargateUsageSchema])
-	.superRefine((usage, ctx) => {
-		const hasLlmTokens = usage.llmInputTokens !== undefined || usage.llmOutputTokens !== undefined;
-		if (hasLlmTokens && usage.model === undefined) {
-			ctx.addIssue({ code: "custom", message: "LLM tokens require a model", path: ["model"] });
-		}
-	});
+export const UsageSchema = z.discriminatedUnion("computeTier", [LambdaUsageSchema, FargateUsageSchema]);
 export type Usage = z.infer<typeof UsageSchema>;
 
 const TierUsageSchema = z.object({

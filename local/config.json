@@ -32,7 +32,14 @@
 		"workerMemoryMb": 2048,
 		"workerVcpu": 1,
 		"workerSpot": false,
-		"leaseSec": 30
+		"leaseSec": 30,
+		"transcribe": {
+			"maxUploadBytes": 20971520,
+			"chunkSec": 1200,
+			"overlapSec": 5,
+			"translateEffort": "low",
+			"translateBatchSegments": 40
+		}
 	},
 	"analyze": {
 		"ffprobePath": "ffprobe",
@@ -63,5 +70,17 @@
 		"shutdownDrainSec": 25,
 		"redeliverCooldownSec": 60,
 		"destinationTestCooldownSec": 60
+	},
+	"openai": {
+		"apiKeySource": "mock",
+		"baseUrl": "https://api.openai.com/v1",
+		"mockPort": 4590,
+		"e2eMockPort": 4591,
+		"mockLanguage": "english",
+		"realApiFixturePath": ".cache/fixtures/real-es.mp3",
+		"timeoutSec": 30,
+		"transcribeTimeoutSec": 120,
+		"maxAttempts": 3,
+		"maxRetryAfterSec": 30
 	}
 }

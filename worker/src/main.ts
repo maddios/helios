@@ -1,7 +1,9 @@
 import { closeDb, config as coreConfig, initDb } from "@helios/core";
+import { validateWorkerConfig } from "./config";
 import { runWorker } from "./pollLoop";
 
 export async function main(): Promise<void> {
+	validateWorkerConfig();
 	await initDb(coreConfig().MONGO_URI);
 	const controller = new AbortController();
 	const stop = () => controller.abort(new Error("Worker stopping"));

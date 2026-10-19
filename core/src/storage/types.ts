@@ -5,6 +5,7 @@ export interface ObjectStore {
 	headObject(bucket: string, key: string): Promise<boolean>;
 	uploadFile(key: string, filePath: string, contentType: string): Promise<number>;
 	uploadStream(key: string, body: Readable, contentType: string): Promise<number>;
+	uploadText(key: string, body: string, contentType: string): Promise<void>;
 	listKeys(prefix: string): Promise<string[]>;
 	deleteKeys(keys: string[]): Promise<void>;
 	presignPut(key: string, expiresSec: number, contentType?: string): Promise<string>;

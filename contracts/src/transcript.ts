@@ -16,3 +16,23 @@ export const TranscriptSchema = z.object({
 	model: z.string().describe("Transcription model identifier")
 });
 export type Transcript = z.infer<typeof TranscriptSchema>;
+
+export const TranscriptFilesSchema = z.object({
+	srt: z.string().describe("Location of the SRT caption file"),
+	vtt: z.string().describe("Location of the WebVTT caption file"),
+	txt: z.string().describe("Location of the plain text file")
+});
+export type TranscriptFiles = z.infer<typeof TranscriptFilesSchema>;
+
+export const TranscriptViewSchema = TranscriptSchema.extend({
+	urls: TranscriptFilesSchema.describe("CDN urls of the transcript files")
+});
+export type TranscriptView = z.infer<typeof TranscriptViewSchema>;
+
+export const TranscriptOutputSchema = z.object({
+	language: z.string().describe("Language of the stored transcript"),
+	isTranslation: z.boolean().describe("Whether the stored transcript is a translation"),
+	revision: z.int().describe("Revision of the stored transcript, bumped on each write"),
+	keys: TranscriptFilesSchema.describe("Storage keys of the transcript files")
+});
+export type TranscriptOutput = z.infer<typeof TranscriptOutputSchema>;

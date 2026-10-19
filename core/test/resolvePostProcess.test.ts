@@ -1,3 +1,4 @@
+import { ValidationError } from "@helios/contracts";
 import { resolvePostProcess } from "../src/pipeline";
 
 const defaults = { transcribe: true, sceneDetection: true };
@@ -40,6 +41,11 @@ describe("resolvePostProcess", () => {
 			language: "fr",
 			translateToEnglish: false
 		});
+	});
+
+	it("rejects a language hint that is not in the language table", () => {
+		expect(() => resolvePostProcess({ transcribe: { language: "klingon" } }, defaults)).toThrow(ValidationError);
+		expect(() => resolvePostProcess({ transcribe: { language: "Spanish" } }, defaults)).toThrow(ValidationError);
 	});
 
 	it("uses the request scene detection value when defined", () => {

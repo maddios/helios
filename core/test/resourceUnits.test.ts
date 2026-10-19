@@ -43,19 +43,32 @@ describe("computeResourceUnits", () => {
 		expect(units.outputGb).toBe(1);
 	});
 
-	it("sums transcription audio seconds and LLM tokens per model", () => {
-		const units = computeResourceUnits([
-			{ computeTier: "lambda", computeSec: 1, memoryMb: 128, audioSec: 30, model: "whisper" },
-			{ computeTier: "lambda", computeSec: 1, memoryMb: 128, llmInputTokens: 100, llmOutputTokens: 20, model: "gpt" },
-			{ computeTier: "lambda", computeSec: 1, memoryMb: 128, llmInputTokens: 50, llmOutputTokens: 5, model: "gpt" }
-		]);
+	it("sums transcription audio seconds", () => {
+		const units = computeResourceUnits([{ computeTier: "lambda", computeSec: 1, memoryMb: 128, audioSec: 30 }]);
 		expect(units.transcriptionAudioSeconds).toBe(30);
-		expect(units.llmTokens).toEqual({ gpt: { input: 150, output: 25 } });
 	});
 
-	it("throws when LLM tokens have no model", () => {
-		expect(() =>
-			computeResourceUnits([{ computeTier: "lambda", computeSec: 1, memoryMb: 128, llmInputTokens: 1 }])
-		).toThrow(/model/);
+	it("sums LLM tokens per model across attempts and calls", () => {
+		const units = computeResourceUnits([
+			{
+				computeTier: "lambda",
+				computeSec: 1,
+				memoryMb: 128,
+				llm: [
+					{ model: "gpt-6-sol", inputTokens: 100, outputTokens: 20 },
+					{ model: "gpt-6-luna", inputTokens: 7, outputTokens: 1 }
+				]
+			},
+			{
+				computeTier: "lambda",
+				computeSec: 1,
+				memoryMb: 128,
+				llm: [{ model: "gpt-6-sol", inputTokens: 50, outputTokens: 5 }]
+			}
+		]);
+		expect(units.llmTokens).toEqual({
+			"gpt-6-sol": { input: 150, output: 25 },
+			"gpt-6-luna": { input: 7, output: 1 }
+		});
 	});
 });

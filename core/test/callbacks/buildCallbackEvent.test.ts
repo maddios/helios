@@ -37,6 +37,47 @@ describe("buildCallbackEvent", () => {
 			expect(await eventFor(itemMessage("encode:a"))).toBe(event);
 		});
 
+		it("carries the transcript urls at the stored revision when a transcribe item completed", async () => {
+			await seedRequest(REQUEST_ID, { items: [{ key: "transcribe", kind: "transcribe", status: "COMPLETE" }] });
+			await pipelineItems().updateOne(
+				{ _id: `${REQUEST_ID}:transcribe` },
+				{
+					$set: {
+						output: {
+							transcripts: [
+								{
+									language: "en",
+									isTranslation: true,
+									revision: 3,
+									keys: {
+										srt: "acme/media/asset-1/transcript/en.translated.srt",
+										vtt: "acme/media/asset-1/transcript/en.translated.vtt",
+										txt: "acme/media/asset-1/transcript/en.translated.txt"
+									}
+								}
+							]
+						}
+					}
+				}
+			);
+
+			const { envelope } = await buildCallbackEvent(itemMessage("transcribe"), new Date());
+
+			expect(envelope.data).toMatchObject({
+				transcripts: [
+					{
+						language: "en",
+						isTranslation: true,
+						urls: {
+							srt: "https://cdn.test.invalid/helios-test-media/acme/media/asset-1/transcript/en.translated.srt?v=3",
+							vtt: "https://cdn.test.invalid/helios-test-media/acme/media/asset-1/transcript/en.translated.vtt?v=3",
+							txt: "https://cdn.test.invalid/helios-test-media/acme/media/asset-1/transcript/en.translated.txt?v=3"
+						}
+					}
+				]
+			});
+		});
+
 		it("carries the item outputs with CDN urls when the item completed", async () => {
 			await seedRequest(REQUEST_ID, { items: [{ key: "encode:a", kind: "encode", status: "COMPLETE" }] });
 			await pipelineItems().updateOne(

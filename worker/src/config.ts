@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { aiConfig } from "@helios/core";
+
+export const PROVIDER_MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+// 32 kbps mono MP3 (see extractAudio): 4000 bytes per second.
+const AUDIO_BYTES_PER_SEC = 4000;
 
 const shared = {
 	FFMPEG_PATH: z.string().min(1),
@@ -7,7 +12,12 @@ const shared = {
 	HEARTBEAT_SEC: z.coerce.number().positive(),
 	LEASE_SEC: z.coerce.number().int().positive(),
 	VISIBILITY_EXTENSION_SEC: z.coerce.number().int().positive(),
-	SOURCE_URL_TTL_SEC: z.coerce.number().int().positive()
+	SOURCE_URL_TTL_SEC: z.coerce.number().int().positive(),
+	TRANSCRIBE_MAX_UPLOAD_BYTES: z.coerce.number().int().positive(),
+	TRANSCRIBE_CHUNK_SEC: z.coerce.number().int().positive(),
+	TRANSCRIBE_OVERLAP_SEC: z.coerce.number().int().nonnegative(),
+	TRANSLATE_EFFORT: z.enum(["low", "medium", "high"]),
+	TRANSLATE_BATCH_SEGMENTS: z.coerce.number().int().positive()
 };
 
 const fargateSchema = z.object({
@@ -44,6 +54,28 @@ const schema = z.discriminatedUnion("WORKER_TIER", [fargateSchema, lambdaSchema]
 			path: ["VISIBILITY_EXTENSION_SEC"]
 		});
 	}
+	if (value.TRANSCRIBE_OVERLAP_SEC >= value.TRANSCRIBE_CHUNK_SEC) {
+		ctx.addIssue({
+			code: "custom",
+			message: "TRANSCRIBE_OVERLAP_SEC must be < TRANSCRIBE_CHUNK_SEC",
+			path: ["TRANSCRIBE_OVERLAP_SEC"]
+		});
+	}
+	if (value.TRANSCRIBE_MAX_UPLOAD_BYTES >= PROVIDER_MAX_UPLOAD_BYTES) {
+		ctx.addIssue({
+			code: "custom",
+			message: "TRANSCRIBE_MAX_UPLOAD_BYTES must be < 25 MiB",
+			path: ["TRANSCRIBE_MAX_UPLOAD_BYTES"]
+		});
+	}
+	const windowBytes = (value.TRANSCRIBE_CHUNK_SEC + 2 * value.TRANSCRIBE_OVERLAP_SEC) * AUDIO_BYTES_PER_SEC;
+	if (windowBytes >= value.TRANSCRIBE_MAX_UPLOAD_BYTES) {
+		ctx.addIssue({
+			code: "custom",
+			message: "(TRANSCRIBE_CHUNK_SEC + 2 * TRANSCRIBE_OVERLAP_SEC) * 4000 must be < TRANSCRIBE_MAX_UPLOAD_BYTES",
+			path: ["TRANSCRIBE_MAX_UPLOAD_BYTES"]
+		});
+	}
 });
 
 export type WorkerConfig = z.infer<typeof schema>;
@@ -61,6 +93,11 @@ export function config(): WorkerConfig {
 		cached = result.data;
 	}
 	return cached;
+}
+
+export function validateWorkerConfig(): void {
+	config();
+	aiConfig();
 }
 
 export function fargateConfig(): FargateWorkerConfig {

@@ -19,6 +19,9 @@ export * from "./analyze";
 export * from "./intake";
 export * from "./scaler";
 export * from "./views";
+export * from "./ai";
+export * from "./captions";
+export * from "./transcripts";
 export * from "./webhooks";
 export { config, type Config } from "./config";
 export {

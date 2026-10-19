@@ -73,6 +73,12 @@ export class S3ObjectStore implements ObjectStore {
 		return bytes;
 	}
 
+	async uploadText(key: string, body: string, contentType: string): Promise<void> {
+		await this.client.send(
+			new PutObjectCommand({ Bucket: this.mediaBucket, Key: key, Body: body, ContentType: contentType })
+		);
+	}
+
 	async listKeys(prefix: string): Promise<string[]> {
 		const keys: string[] = [];
 		for await (const page of paginateListObjectsV2(

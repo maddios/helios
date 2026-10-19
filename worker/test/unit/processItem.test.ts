@@ -5,10 +5,12 @@ import {
 	completeItem,
 	contextLogger,
 	mediaAssets,
+	OpenAIError,
 	recordFailedAttempt,
 	releaseLease,
 	renewLease,
-	requests
+	requests,
+	type UsageMeter
 } from "@helios/core";
 import { config, resetConfigForTests } from "../../src/config";
 import { FfmpegError } from "../../src/ffmpeg/run";
@@ -43,6 +45,7 @@ const item = {
 const request = { _id: "req-1", status: "IN_PROGRESS" };
 const asset = { _id: "asset-1", accountId: "acc-1", activeStill: undefined };
 const LEASE_ID = "lease-1";
+const LLM_CALL = { model: "gpt-6-luna", inputTokens: 3, outputTokens: 1 };
 
 function input(overrides: Partial<ProcessItemInput> = {}): ProcessItemInput {
 	return {
@@ -321,5 +324,59 @@ describe("processItem", () => {
 			usage: expect.objectContaining({ computeTier: "fargate" })
 		});
 		expect(recordFailedAttempt).not.toHaveBeenCalled();
+	});
+
+	it("attaches the audio and LLM usage metered during a successful attempt", async () => {
+		claimed();
+		handlerThat(async (ctx: { meter: UsageMeter }) => {
+			ctx.meter.recordAudio(12);
+			ctx.meter.recordLlm(LLM_CALL);
+			return { output: { assetOutputs: {} } };
+		});
+
+		await expect(processItem(input())).resolves.toBe("done");
+
+		expect(completeItem).toHaveBeenCalledWith(
+			expect.objectContaining({ usage: expect.objectContaining({ audioSec: 12, llm: [LLM_CALL] }) })
+		);
+	});
+
+	it("records the usage metered before a failed attempt, so AI calls are not lost on retry", async () => {
+		claimed();
+		handlerThat(async (ctx: { meter: UsageMeter }) => {
+			ctx.meter.recordLlm(LLM_CALL);
+			throw new Error("schema mismatch");
+		});
+
+		await expect(processItem(input())).rejects.toThrow("schema mismatch");
+
+		expect(recordFailedAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({ usage: expect.objectContaining({ llm: [LLM_CALL] }) })
+		);
+	});
+
+	it("releases the lease with the audio usage metered before an interruption", async () => {
+		claimed();
+		const controller = new AbortController();
+		handlerThat(async (ctx: { meter: UsageMeter; signal: AbortSignal }) => {
+			ctx.meter.recordAudio(7);
+			controller.abort(new Error("Worker stopping"));
+			ctx.signal.throwIfAborted();
+		});
+
+		await expect(processItem(input({ signal: controller.signal }))).resolves.toBe("interrupted");
+
+		expect(releaseLease).toHaveBeenCalledWith(item._id, LEASE_ID, expect.objectContaining({ audioSec: 7 }));
+	});
+
+	it("stores an OpenAI failure as its sanitized code, never the provider text", async () => {
+		claimed();
+		handlerThat(jest.fn().mockRejectedValue(new OpenAIError({ status: 429, code: "rate_limit_exceeded" })));
+
+		await expect(processItem(input())).rejects.toBeInstanceOf(OpenAIError);
+
+		expect(recordFailedAttempt).toHaveBeenCalledWith(
+			expect.objectContaining({ error: "OpenAI request failed (openai_429_rate_limit_exceeded)" })
+		);
 	});
 });

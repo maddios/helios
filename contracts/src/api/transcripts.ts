@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { TranscriptSchema } from "../transcript";
+import { TranscriptViewSchema } from "../transcript";
 
 export const AssetTranscriptsResponseSchema = z
 	.object({
-		transcripts: z.array(TranscriptSchema).describe("Transcripts produced for the asset")
+		transcripts: z.array(TranscriptViewSchema).describe("Transcripts produced for the asset, with CDN urls")
 	})
 	.meta({ id: "AssetTranscripts" });
 export type AssetTranscriptsResponse = z.infer<typeof AssetTranscriptsResponseSchema>;

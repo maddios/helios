@@ -5,6 +5,7 @@ import {
 	mediaAssets,
 	pipelineItems,
 	queueFor,
+	transcripts,
 	UnprocessableSourceError,
 	type ItemMessage
 } from "@helios/core";
@@ -139,6 +140,45 @@ describe("assets", () => {
 
 		expect(transcripts.body).toEqual({ transcripts: [] });
 		expect(scenes.status).toBe(404);
+	});
+
+	it("lists stored transcripts with CDN urls at the stored revision", async () => {
+		const asset = await seedAsset(accountId, { version: 2 });
+		await transcripts().insertOne({
+			_id: randomUUID(),
+			accountId,
+			assetId: asset._id,
+			language: "en",
+			isTranslation: true,
+			segments: [{ start: 0, end: 1, text: "hi" }],
+			text: "hi",
+			durationSec: 1,
+			model: "whisper-1",
+			revision: 3,
+			createdAt: new Date()
+		});
+
+		const res = await request(app).get(`/assets/${asset._id}/transcripts`).set("Authorization", bearer(key));
+
+		const base = `${CDN_BASE}/${slug}/media/${asset._id}/transcript/en`;
+		expect(res.status).toBe(200);
+		expect(res.body).toEqual({
+			transcripts: [
+				{
+					language: "en",
+					isTranslation: true,
+					segments: [{ start: 0, end: 1, text: "hi" }],
+					text: "hi",
+					durationSec: 1,
+					model: "whisper-1",
+					urls: {
+						srt: `${base}.translated.srt?v=3`,
+						vtt: `${base}.translated.vtt?v=3`,
+						txt: `${base}.translated.txt?v=3`
+					}
+				}
+			]
+		});
 	});
 
 	it("deletes an asset with 202, tombstones it and purges its items", async () => {

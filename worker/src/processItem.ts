@@ -14,7 +14,8 @@ import {
 	type ClaimResult,
 	type MediaAsset,
 	type PipelineItem,
-	type PipelineRequest
+	type PipelineRequest,
+	UsageMeter
 } from "@helios/core";
 import { config } from "./config";
 import { FfmpegError } from "./ffmpeg/run";
@@ -62,6 +63,7 @@ interface Attempt {
 	lease: AbortController;
 	signal: AbortSignal;
 	progress: { pct: number };
+	meter: UsageMeter;
 }
 
 export async function processItem(input: ProcessItemInput): Promise<ItemOutcome> {
@@ -94,7 +96,8 @@ async function runClaimed(input: ProcessItemInput, claim: ClaimedItem): Promise<
 		startedAt: Date.now(),
 		lease,
 		signal: AbortSignal.any([input.signal, lease.signal]),
-		progress: { pct: 0 }
+		progress: { pct: 0 },
+		meter: new UsageMeter()
 	};
 	const stopHeartbeat = startHeartbeat({
 		intervalSec: config().HEARTBEAT_SEC,
@@ -116,12 +119,12 @@ async function runClaimed(input: ProcessItemInput, claim: ClaimedItem): Promise<
 		itemId: input.itemId,
 		status: "COMPLETE",
 		output: result.output,
-		usage: attemptUsage(elapsedSec(attempt.startedAt), result.outputBytes)
+		usage: attemptUsage(attempt, result.outputBytes)
 	});
 	return "done";
 }
 
-async function runHandler({ input, claim, signal, progress }: Attempt): Promise<HandlerResult> {
+async function runHandler({ input, claim, signal, progress, meter }: Attempt): Promise<HandlerResult> {
 	const { item, request } = claim;
 	const { asset, slug } = await loadAssetAndSlug(item);
 	const workDir = path.join(config().WORK_DIR, item._id);
@@ -134,6 +137,7 @@ async function runHandler({ input, claim, signal, progress }: Attempt): Promise<
 			slug,
 			workDir,
 			signal,
+			meter,
 			reportProgress: (pct) => {
 				progress.pct = pct;
 			}
@@ -144,9 +148,9 @@ async function runHandler({ input, claim, signal, progress }: Attempt): Promise<
 }
 
 async function failedOutcome(attempt: Attempt, err: unknown): Promise<ItemOutcome> {
-	const { input, claim, startedAt, signal } = attempt;
+	const { input, claim, signal } = attempt;
 	const { itemId } = input;
-	const usage: Usage = attemptUsage(elapsedSec(startedAt));
+	const usage = attemptUsage(attempt);
 	if (input.signal.aborted) {
 		if (input.releaseLeaseOnAbort) {
 			await releaseLease(itemId, claim.leaseId, usage);
@@ -193,11 +197,12 @@ async function loadAssetAndSlug(item: PipelineItem): Promise<{ asset: MediaAsset
 	return { asset, slug: account.slug };
 }
 
-function attemptUsage(computeSec: number, outputBytes?: number): Usage {
+function attemptUsage({ startedAt, meter }: Attempt, outputBytes?: number): Usage {
 	const cfg = config();
 	const common = {
-		computeSec,
-		...(outputBytes !== undefined && { outputBytes })
+		computeSec: elapsedSec(startedAt),
+		...(outputBytes !== undefined && { outputBytes }),
+		...meter.snapshot()
 	};
 	if (cfg.WORKER_TIER === "lambda") {
 		return { computeTier: "lambda", memoryMb: cfg.AWS_LAMBDA_FUNCTION_MEMORY_SIZE, ...common };

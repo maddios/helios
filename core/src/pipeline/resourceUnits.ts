@@ -1,4 +1,4 @@
-import type { ResourceUnits, Usage } from "@helios/contracts";
+import type { LlmUsage, ResourceUnits, Usage } from "@helios/contracts";
 
 const MB_PER_GB = 1024;
 const BYTES_PER_GIB = 1024 ** 3;
@@ -18,7 +18,9 @@ export function computeResourceUnits(usages: Usage[]): ResourceUnits {
 		addCompute(units, usage);
 		units.outputGb += (usage.outputBytes ?? 0) / BYTES_PER_GIB;
 		units.transcriptionAudioSeconds += usage.audioSec ?? 0;
-		addLlmTokens(units, usage);
+		for (const call of usage.llm ?? []) {
+			addLlmTokens(units, call);
+		}
 	}
 	return units;
 }
@@ -40,16 +42,10 @@ function addCompute(units: ResourceUnits, usage: Usage): void {
 	}
 }
 
-function addLlmTokens(units: ResourceUnits, usage: Usage): void {
-	if (usage.llmInputTokens === undefined && usage.llmOutputTokens === undefined) {
-		return;
-	}
-	if (usage.model === undefined) {
-		throw new Error("LLM usage requires a model");
-	}
-	const total = units.llmTokens[usage.model] ?? { input: 0, output: 0 };
-	units.llmTokens[usage.model] = {
-		input: total.input + (usage.llmInputTokens ?? 0),
-		output: total.output + (usage.llmOutputTokens ?? 0)
+function addLlmTokens(units: ResourceUnits, call: LlmUsage): void {
+	const total = units.llmTokens[call.model] ?? { input: 0, output: 0 };
+	units.llmTokens[call.model] = {
+		input: total.input + call.inputTokens,
+		output: total.output + call.outputTokens
 	};
 }

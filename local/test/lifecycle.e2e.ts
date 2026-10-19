@@ -311,7 +311,8 @@ describe("request lifecycle against LocalStack and Mongo", () => {
 			segments: [{ start: 0, end: 1, text: "hello" }],
 			text: "hello",
 			durationSec: 9,
-			model: "e2e"
+			model: "e2e",
+			revision: 1
 		});
 		await sceneAnalyses().insertOne({
 			_id: `${encoded._id}:scenes`,

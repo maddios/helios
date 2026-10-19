@@ -148,7 +148,7 @@
   7. The SQS message is deleted last.
 - **Terminal rerun:** `claimItem` returns `{claimed: false, reason: "terminal", status}` for a terminal item. The worker then runs `completeItem({itemId, status})` to repair a crashed handoff. Claim order: load the item, then the request. A CANCELLED request settles the item CANCELLED through `completeItem` (restricted to non-terminal items) and returns `cancelled` without incrementing attempts.
 - **Callback consumers** must be idempotent and read the terminal status from `job_reports`. Terminal reruns re-send callbacks beyond the FIFO dedup window, so duplicates are expected.
-- **Usage:** each attempt pushes one `Usage` entry onto its item (`computeTier`, `computeSec`, `memoryMb`, plus `vcpu` and `spot` for fargate, and optional output, audio and LLM fields). Failed attempts are recorded with `recordFailedAttempt` before the error is rethrown. Interrupted (SIGTERM) attempts are metered too: `releaseLease` pushes their usage under the lease. Superseded attempts pass their usage to `completeItem`. The job report stores `usage` as a `UsageSummary` with only the metrics that are present, per tier and per LLM model.
+- **Usage:** each attempt pushes one `Usage` entry onto its item (`computeTier`, `computeSec`, `memoryMb`, plus `vcpu` and `spot` for fargate, and optional output, audio and LLM fields). Failed attempts are recorded with `recordFailedAttempt` before the error is rethrown. Interrupted (SIGTERM) attempts are metered too: `releaseLease` pushes their usage under the lease. Superseded attempts pass their usage to `completeItem`. The job report stores `usage` as a `UsageSummary` with only the metrics that are present, per tier. LLM tokens per model live only in `ResourceUnits.llmTokens`, never in `UsageSummary`.
 - **Terminal statuses:** COMPLETE, SKIPPED, ERROR and CANCELLED all set `completedAt`, which starts the TTL.
 - **Crash at any point:** the message reappears after the visibility timeout, and the handler reruns safely.
 - **Fan-out recovery (the scaler owns it):** once the `requests` doc is persisted, finishing the request is Helios's job, never the client's.
@@ -192,7 +192,7 @@ postProcess?: {
 2. Call the OpenAI audio transcription API with segment-level timestamps. The model is set in `config/ai.ts`; it must support timestamped segments (`whisper-1` verbose_json is the known-good baseline).
 3. If the detected language ≠ English and translation is enabled, produce an English track via the translation endpoint.
 4. Store `transcripts` (Mongo): `{accountId, assetId, language, isTranslation, segments:[{start,end,text}], text, durationSec, model, createdAt}`. Write SRT/VTT/TXT to S3 under `{slug}/media/{assetId}/transcript/{lang}.{srt|vtt|txt}` (SRT→VTT/TXT conversion helper).
-5. Errors are retried via SQS redelivery (`maxReceiveCount` 3). The DLQ consumer marks the step ERROR and lets `scenes` proceed stills-only. The error message is stored on the item.
+5. Errors are retried via SQS redelivery (`maxReceiveCount` 3). The DLQ consumer marks the step SKIPPED (optional AI step) and lets `scenes` proceed stills-only. The error message is stored on the item.
 
 **Scene detection worker step.** It replaces `Vision.php` + `SearchMediaProcessingCron::fetchTimestampMetadata`/`fetchContentMetadata`, as one structured call per video.
 
@@ -256,7 +256,7 @@ Person = { species, gender|null, approximateAge|null, ethnicity|null, skinColor|
   - A server-generated id alone can't dedupe, because a client whose POST timed out never received it.
   - _Build step:_ model/fan-out now; route in step 3.
 - **Usage metering for dashboard stats (addition 5):**
-  - Items record `usage: {computeTier, computeSec, outputBytes, audioSec, llmInputTokens, llmOutputTokens, model}`.
+  - Items record `usage: {computeTier, computeSec, outputBytes, audioSec, llm: [{model, inputTokens, outputTokens}]}`, plus the tier fields.
   - `job_reports` rolls these up per request.
   - `GET /usage?from&to&groupBy` serves the console.
   - _Build step:_ schema now; filled in by the workers.
@@ -765,6 +765,94 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - `CALLBACK_TIMEOUT_SEC` is required. It is set in `local/config.json` and in the core test env.
 - **2026-10-18 local lambda e2e:** in-process tests share one `WORKER_TIER` (the standalone runner sets `lambda` in `main()`, not `runLambdaSources`). Failure injection uses real conditions: a 5 s `lambda-p1` timeout for redrive, and a missing source key on a non-default preset for the DLQ. The e2e queues use `e2eVisibilityTimeoutSec` (30 s), and they are purged before each run. The callback retry keeps the 30 s schedule (no short-backoff config). The resumer e2e inserts both stuck kinds directly (ANALYZING with no analyze message, and an unlaunched IN_PROGRESS request), with no analyze message in either case.
 
+## Step 5 design: transcription
+
+**AI client (`core/src/ai/`)**, modelled on bella `helpers/gpt.ts`:
+- Uses native `fetch` against `OPENAI_BASE_URL` (required config: `https://api.openai.com/v1` in AWS, the local mock server URL locally) with `OPENAI_API_KEY`.
+- **Effort tiers:** `ModelEffort` (`low | medium | high`) maps to model ids in **one** file, `core/src/ai/models.ts` (`gpt-6-luna`, `gpt-6-sol`, `gpt-6-astra` as in bella). The transcription model is `whisper-1`.
+- **No fallback model chain** (AGENTS.md): a failed call throws, and SQS redelivery retries it.
+- **Retries:** an in-process retry only for 429/5xx, timeouts and network failures (`fetch failed`, `ECONNRESET`, `ETIMEDOUT`, `UND_ERR_*`), bounded by `OPENAI_MAX_ATTEMPTS` with exponential backoff. `Retry-After` (seconds or HTTP-date) is capped at `OPENAI_MAX_RETRY_AFTER_SEC`. Waits are abortable. After that, SQS redelivery takes over.
+- **Timeouts:** `OPENAI_TIMEOUT_SEC` for chat and `OPENAI_TRANSCRIBE_TIMEOUT_SEC` for `/audio/transcriptions`, each combined with the caller's signal via `AbortSignal.any`.
+- **Structured output:** `chatJson({ effort, system, user, schema, schemaName, temperature, meter, signal })` sends `response_format: { type: "json_schema", strict: true }` and parses the whole body as JSON, validated with the matching zod schema. Strict mode needs every property required, so a schema with an optional field is rejected before sending (use `nullable`). No regex scraping.
+- **Usage:** the client records into a per-attempt `UsageMeter` as soon as a provider response arrives, before refusal or schema validation. `transcribeAudio` records the response duration as audio seconds. Item usage is read from the meter on success, failure and interrupt (D1 below).
+- **Errors:** item errors never carry provider text. An `OpenAIError` is stored as `OpenAI request failed (openai_<status>_<code>)`, and a refusal is stored as a fixed message.
+
+**Transcribe step** (`transcribe` item; `lambda-ai` for short sources, `fargate-p3` otherwise; worker handler registry kind `transcribe`):
+1. **Extract audio:**
+   - Run ffmpeg on the (guarded) source → mono, 16 kHz, `libmp3lame` at 32 kbps (≈14 MB/hour).
+   - A source without an audio stream was already SKIPPED at fan-out.
+2. **Chunk** when the file exceeds `TRANSCRIBE_MAX_UPLOAD_BYTES` (config, below the 25 MB provider limit). The cut is by time:
+   - `TRANSCRIBE_CHUNK_SEC` windows, each extended by `TRANSCRIBE_OVERLAP_SEC`.
+   - Each chunk is transcribed with `whisper-1`, `response_format=verbose_json`, `timestamp_granularities[]=segment`, plus the request's `language` hint when given.
+   - **Merge:** offset each chunk's segments by the chunk start, and keep a segment only if its midpoint falls inside the chunk's own non-overlapping window `[start, nextStart)`. Every moment then belongs to exactly one chunk: there are no duplicates, and no segment is lost at a boundary.
+3. **Language:** Whisper's detected language name is mapped to a code with a fixed table (`javanese` → `jv`). An unknown name throws a typed error; it does not silently become English. A request hint is validated at intake against the table's codes (`ValidationError`). With no hint, chunk 0's detected code is the hint for the later chunks, so every chunk of one source uses the same language.
+4. **English track:** when the native language ≠ `en` and `translateToEnglish` is set (the default):
+   - The native segments are translated with `chatJson`, effort tier `TRANSLATE_EFFORT` (config), in batches of `TRANSLATE_BATCH_SEGMENTS`.
+   - Schema: `{ segments: [{ index, text }] }`. The indices must exactly match the input batch, otherwise a typed error is raised and the attempt retries.
+   - Start and end times are copied from the native segments, so both tracks align exactly.
+5. **Store:**
+   - Upsert into `transcripts` on the unique `{assetId, language, isTranslation}` key, so reruns never duplicate (partnrup's duplicate-row bug). Each write bumps `revision` (`$inc`). URLs carry `?v=<revision>`.
+   - Fields: `{ segments: [{start,end,text}], text, durationSec, model, createdAt }`.
+   - Write `{slug}/media/{assetId}/transcript/{lang}.{srt|vtt|txt}` for the native track and `transcript/{lang}.translated.{srt|vtt|txt}` for the translation (`en.translated.*`). Native English never also has a translation.
+   - After all tracks are stored, rows and files of this asset not in this output are removed (`removeStaleTranscripts`), so a rerun with a different detected language leaves no stale track.
+   - Merge boundaries are a heuristic, since Whisper segments each chunk differently. After midpoint selection, each segment's end is clamped to the next start, and a segment left with no duration is dropped. The e2e asserts non-overlapping, ordered cues.
+6. **Usage:** the attempt's usage entry carries `audioSec` (transcription seconds) and one `llm` entry per chat call → resource units `transcriptionAudioSeconds` + `llmTokens`.
+7. **Errors** are retried through SQS (`maxReceiveCount` 3). The DLQ consumer marks the step SKIPPED (optional AI step), so `scenes` proceeds stills-only. The item's `error` is stored.
+
+**Caption utilities** (`core/src/captions/`):
+- Pure `toSrt`, `toVtt`, `toText`, `parseSrt`, `parseVtt`. Index lines are positional, so a caption whose text is a number such as `2024` or `0` is preserved, which fixes partnrup's `_splitSrt` bug.
+- Timestamps use millisecond floor rounding.
+- Round-trip tests, including multi-line text, numeric-only lines, an empty text segment and hours > 99.
+
+**API:**
+- `GET /assets/:id/transcripts` returns `[{ language, isTranslation, segments, text, durationSec, model, urls: { srt, vtt, txt } }]`.
+- `GET /assets/:id` includes `postProcess.transcribe.status`.
+- Item callbacks for `transcribe` carry the transcript summary (languages + URLs).
+
+**Local testing:**
+- **Default:** `local/openaiMock.ts`, an HTTP server that implements `/audio/transcriptions` (canned `verbose_json` derived from the chunk duration, with a configurable language) and `/chat/completions` (echoes the translated text deterministically). The e2e runs the full chunk → merge → translate → store path with no network.
+- **Opt-in real API:** `npm run test:openai` runs only when `OPENAI_API_KEY` is set in the root `.env`. It uses a short speech fixture (TTS-generated when a TTS tool is available; otherwise a fixture path given in `local/config.json`) and checks native + English output and timings.
+
+**Deviations as built (2026-10-18).**
+
+- **Usage (D1):** every attempt meters AI usage, including failed and interrupted attempts. The client records each provider response into the attempt's `UsageMeter` before validation, so calls made before a failure are kept. Each attempt is still one usage entry.
+- **No cross-attempt reuse (D3):** a retried item re-extracts and re-transcribes its audio. The native track is not reused from an earlier attempt.
+- **Chunk windows:** a window is `[keepFrom - overlap, keepUntil + overlap]`, so each side has context. Only the merge's keep range decides ownership.
+- **Copy cuts:** `-c copy` is aligned to mp3 frames, so a cut can be about 0.13 s longer than planned. The merge offset uses the planned start, so this stays within one frame.
+- **Language:** `transcribeAudio` returns the ISO-639-1 code, so the handler does not map names again. The first chunk's detected language is the stored language. With no request hint, it is also the hint for the later chunks.
+- **Language codes:** `haw` and `yue` are ISO 639-2/3 codes that Whisper uses. They pass intake validation, but the OpenAI API may reject them as hints, since it documents ISO-639-1.
+- **Translation:** a schema or index mismatch throws `TranslationMismatchError`, and SQS redelivers the whole item. The retry re-transcribes all chunks.
+- **Local mock:** the detected language is `openai.mockLanguage` unless a request hint is sent, in which case the mock reports that hint's name. Segments start at a lead-in offset, not at 0. Forced failures are per endpoint, set by `setFailures`.
+- **Local mock runner:** `helios-openai-mock` is its own compose service (`local/openaiMock.ts`, host network, `openai.mockPort`). `runWorker` and `lambdaRunner` no longer start a mock. The e2e tests start their own mock on `openai.e2eMockPort`, and `applyLocalEnv` points `OPENAI_BASE_URL` there when run with `e2e: true`.
+- **Per-suite scripts (D2):** `npm run test:local:<name>` runs one e2e file (`fanOut`, `worker`, `lifecycle`, `api`, `eventbridge`, `lambdas`, `transcribe`). `test:local` remains the full run.
+- **Local e2e:** the encode in `transcribe.e2e.ts` uses `mp4_360`, `stills` and `audio` only, so the 200 s source finishes inside the 180 s drain deadline. The transcribe item is unchanged.
+- **Read API:** `GET /assets/:id/transcripts` returns `urls` (`?v=<revision>`) per transcript. The e2e checks the S3 keys and Mongo documents directly.
+- **Callbacks:** item callbacks for `transcribe` carry `transcripts: [{language, isTranslation, urls}]` on the item event data.
+- **Startup validation:** the worker validates its config and `aiConfig()` at startup (`main`), and `lambdaRunner` does the same. The Lambda handler validates on each invocation, because `lambdaRunner` imports the handler before it applies the local environment.
+
+## Step 5b: multi-language translations (added 2026-10-19)
+**API shape:** `postProcess.transcribe = boolean | { language?: ISO hint for the source, translations?: string[] (extra ISO targets), english?: boolean (default true), retranscribe?: boolean }`.
+- **Native track:**
+  - The source language is auto-detected unless `language` is given.
+  - English is added automatically when the native language ≠ `en`, unless `english: false`.
+  - `translations` are extra targets on top of that. They are deduped, the native language is dropped from the set, and every code is validated against the language table.
+  - When the native language is `en`, the extras are translated from English.
+- **Translations** always come from the native segments, so the timings stay identical.
+- **Later requests are additive.** `POST /assets/:id/post-process` with only new `translations`:
+  - reuses the stored native transcript (no audio re-transcription, no audio usage);
+  - translates only the languages that are missing;
+  - keeps the existing translations.
+- **`retranscribe: true`** produces a fresh native transcript and regenerates every existing translation from it, plus any new ones. Stale rows and keys are removed only in this case, or on encode/re-encode.
+- **Re-encode / encode** of a source replaces the whole transcript set with the requested one.
+- **Execution:**
+  - When the native track is reused, `transcribe` items run on the AI tiers as before and skip the extract → Whisper stage.
+  - The item output and callback list every language produced or kept.
+  - `scenes` is unaffected by translate-only requests.
+- **Storage:**
+  - Native: `transcript/{lang}.*`; translations: `transcript/{lang}.translated.*`.
+  - Unique `{assetId, language, isTranslation}`.
+  - Each transcript has its own `revision` for CDN cache-busting.
+
 ## Local development & testing
 
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
@@ -863,6 +951,19 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 
 ## Implementation decisions log
 
+- **2026-10-18 (step 5 transcription):**
+  - Audio is extracted with `-vn -ac 1 -ar 16000 -c:a libmp3lame -b:a 32k`. Chunks are planned by time and stream-copied. The merge keeps a segment only if its midpoint is in `[keepFrom, keepUntil)`, so no boundary segment is duplicated or lost.
+  - `TRANSCRIBE_MAX_UPLOAD_BYTES` must be below 25 MiB. `TRANSCRIBE_OVERLAP_SEC` must be below `TRANSCRIBE_CHUNK_SEC`.
+  - English translation is produced in batches of `TRANSLATE_BATCH_SEGMENTS` at effort `TRANSLATE_EFFORT`, with temperature 0.2. Start and end times come from the native track.
+  - Usage is one entry per attempt (audio seconds + an `llm` array), so attempts are not double counted. Every attempt meters what it used, including failed and interrupted ones (D1).
+  - The local OpenAI mock is the `helios-openai-mock` compose service. The e2e tests start their own mock on `openai.e2eMockPort`.
+  - `TRANSCRIBE_MAX_UPLOAD_BYTES` must hold one chunk window: `(TRANSCRIBE_CHUNK_SEC + 2 * TRANSCRIBE_OVERLAP_SEC) * 4000` bytes must be below it (32 kbps audio).
+  - Transcript files use stable keys (`transcript/{lang}.*` native, `transcript/{lang}.translated.*` translation). Stale tracks are deleted after a successful run. Each write bumps `revision`, and URLs use `?v=<revision>`, not the asset version.
+  - Intake validates the transcribe language hint against the language table (`ValidationError`). OpenAI failures are stored as sanitized codes, never provider text.
+  - Whisper's `javanese` maps to `jv`, not `jw`.
+  - `OPENAI_TRANSCRIBE_TIMEOUT_SEC`, `OPENAI_MAX_RETRY_AFTER_SEC` and `OPENAI_TIMEOUT_SEC` are required, with no defaults.
+  - Dead-letter transcribe items settle SKIPPED, which matches the AI section above.
+  - `npm run test:openai` is opt-in. It skips unless `OPENAI_API_KEY` is in the root `.env`, and it needs a Spanish fixture from espeak or `openai.realApiFixturePath`.
 - **2026-10-18 (step 4 review fixes and user decisions):**
   - A. EventBridge `Source` is `helios.<accountId>`. The policy helper takes the authenticated account and adds `Condition: StringEquals events:source`. The CLI shorthand cannot express that condition, so the command is `put-permission --policy` with a merged policy (`--policy` replaces the whole bus policy; the guide shows the merge). The guide rules use the per-account source.
   - B. Scaler target is `max(0, min(visible + in-flight across fargate-p1..p4, MAX_WORKERS) - running)`. The spot rule is unchanged.
@@ -974,3 +1075,20 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - Guide markdown lives once in `docs/guides/*.md`. It is bundled with the esbuild text loader and read by a jest transform. `api/Dockerfile` copies `docs/guides`.
   - `HELIOS_AWS_ACCOUNT_ID` is required (12 digits). Locally it is `111111111111`, and the local customer bus lives in LocalStack's `000000000000`, so the own-account check stays meaningful. `EVENTBRIDGE_ENDPOINT` is optional, for LocalStack.
   - Local EventBridge e2e (`local/test/eventbridge.e2e.ts`): the shared LocalStack enables `events`, and the standalone profile now has `SERVICES: s3,sqs,events`.
+- **2026-10-18 (step 5 review fixes):**
+  - D1: AI usage is metered on every attempt. The client records into a per-attempt `UsageMeter` before validation, and processItem attaches the meter's usage on success, failure and interrupt.
+  - D2: per-suite e2e scripts `test:local:<name>` (fanOut, worker, lifecycle, api, eventbridge, lambdas, transcribe). `test:local` stays the full run.
+  - D3: no cross-attempt reuse of the native track.
+  - Abort propagation: the signal flows through `transcribeAudio`, `chatJson` and `openaiRequest`. Waits are abortable. The translate loop checks the signal between batches.
+  - Stale transcripts are removed after a successful run, with distinct native and translated file keys. `revision` is bumped on each write, and URLs use `?v=<revision>`.
+  - Item callbacks for `transcribe` carry the transcript URLs.
+  - Language hints are validated at intake. Chunks after the first reuse chunk 0's detected language.
+  - Merge clamps each segment's end to the next start (see "Transcription worker step").
+  - Strict json_schema rejects optional fields before sending. VTT cue text escapes `&`, `<` and `>`.
+  - Retries cover network failures. Retry-After accepts HTTP-date and is capped. Timeouts are split by endpoint.
+  - Sanitized item errors: `OpenAI request failed (openai_<status>_<code>)`.
+  - Config is validated at startup. The chunk window must fit the upload limit.
+  - Whisper `javanese` maps to `jv`.
+  - PLAN drift fixes: the AI DLQ outcome is SKIPPED, and `UsageSummary` carries no LLM fields.
+- **2026-10-18:** transcription uses `whisper-1` (verbose_json segments) for the native track. The English track is produced by LLM translation of the timed segments (json_schema), not the Whisper translations endpoint. There is no model fallback chain, unlike bella. Local e2e uses an OpenAI mock server, plus an opt-in real-API test.
+- **2026-10-19:** transcription supports N extra translation languages. English is automatic for non-English sources (`english: false` opts out). Later requests are additive and reuse the native track; `retranscribe` regenerates everything.

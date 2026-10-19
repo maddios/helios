@@ -23,6 +23,16 @@ services:
     volumes:
       - ./local:/app/local:ro
     command: ["npx", "tsx", "local/runWorker.ts"]
+  helios-openai-mock:
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      target: test
+    init: true
+    network_mode: host
+    volumes:
+      - ./local:/app/local:ro
+    command: ["npx", "tsx", "local/openaiMock.ts"]
   helios-api:
     build:
       context: .

@@ -1,4 +1,4 @@
-import type { ItemOutput, MediaAsset, PipelineItem, PipelineRequest } from "@helios/core";
+import type { ItemOutput, MediaAsset, PipelineItem, PipelineRequest, UsageMeter } from "@helios/core";
 
 export interface HandlerContext {
 	item: PipelineItem;
@@ -7,12 +7,13 @@ export interface HandlerContext {
 	slug: string;
 	workDir: string;
 	signal: AbortSignal;
+	meter: UsageMeter;
 	reportProgress: (pct: number) => void;
 }
 
 export interface HandlerResult {
 	output: ItemOutput;
-	outputBytes: number;
+	outputBytes?: number;
 }
 
 export type ItemHandler = (ctx: HandlerContext) => Promise<HandlerResult>;

@@ -44,7 +44,26 @@ const schema = z.object({
 		idleExit: z.boolean(),
 		workerMemoryMb: z.number().int().positive(),
 		workerVcpu: z.number().positive(),
-		workerSpot: z.boolean()
+		workerSpot: z.boolean(),
+		transcribe: z.object({
+			maxUploadBytes: z.number().int().positive(),
+			chunkSec: z.number().int().positive(),
+			overlapSec: z.number().int().nonnegative(),
+			translateEffort: z.enum(["low", "medium", "high"]),
+			translateBatchSegments: z.number().int().positive()
+		})
+	}),
+	openai: z.object({
+		apiKeySource: z.enum(["mock", "env"]),
+		baseUrl: z.url(),
+		mockPort: z.number().int().positive(),
+		e2eMockPort: z.number().int().positive(),
+		mockLanguage: z.string().min(1),
+		realApiFixturePath: z.string().min(1),
+		timeoutSec: z.number().int().positive(),
+		transcribeTimeoutSec: z.number().int().positive(),
+		maxAttempts: z.number().int().positive(),
+		maxRetryAfterSec: z.number().int().positive()
 	}),
 	analyze: z.object({
 		ffprobePath: z.string().min(1),
@@ -76,6 +95,14 @@ const ROOT = path.resolve(__dirname, "..");
 
 export function loadLocalConfig(): LocalConfig {
 	return schema.parse(JSON.parse(fs.readFileSync(path.join(ROOT, "local", "config.json"), "utf8")));
+}
+
+function openAiEnv(openai: LocalConfig["openai"], e2e: boolean): Record<string, string> {
+	if (openai.apiKeySource === "env") {
+		return { OPENAI_BASE_URL: openai.baseUrl };
+	}
+	const port = e2e ? openai.e2eMockPort : openai.mockPort;
+	return { OPENAI_BASE_URL: `http://127.0.0.1:${port}/v1`, OPENAI_API_KEY: "mock-key" };
 }
 
 export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): void {
@@ -123,10 +150,20 @@ export function applyLocalEnv(config: LocalConfig, { e2e }: { e2e: boolean }): v
 		WORKER_MEMORY_MB: String(config.worker.workerMemoryMb),
 		WORKER_VCPU: String(config.worker.workerVcpu),
 		WORKER_SPOT: String(config.worker.workerSpot),
+		TRANSCRIBE_MAX_UPLOAD_BYTES: String(config.worker.transcribe.maxUploadBytes),
+		TRANSCRIBE_CHUNK_SEC: String(config.worker.transcribe.chunkSec),
+		TRANSCRIBE_OVERLAP_SEC: String(config.worker.transcribe.overlapSec),
+		TRANSLATE_EFFORT: config.worker.transcribe.translateEffort,
+		TRANSLATE_BATCH_SEGMENTS: String(config.worker.transcribe.translateBatchSegments),
+		...openAiEnv(config.openai, e2e),
 		API_PORT: String(config.api.port),
 		RETRY_AFTER_SEC: String(config.api.retryAfterSec),
 		SHUTDOWN_DRAIN_SEC: String(config.api.shutdownDrainSec),
 		REDELIVER_COOLDOWN_SEC: String(config.api.redeliverCooldownSec),
-		DESTINATION_TEST_COOLDOWN_SEC: String(config.api.destinationTestCooldownSec)
+		DESTINATION_TEST_COOLDOWN_SEC: String(config.api.destinationTestCooldownSec),
+		OPENAI_TIMEOUT_SEC: String(config.openai.timeoutSec),
+		OPENAI_TRANSCRIBE_TIMEOUT_SEC: String(config.openai.transcribeTimeoutSec),
+		OPENAI_MAX_ATTEMPTS: String(config.openai.maxAttempts),
+		OPENAI_MAX_RETRY_AFTER_SEC: String(config.openai.maxRetryAfterSec)
 	});
 }

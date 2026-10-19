@@ -1,4 +1,4 @@
-import { db, ensureIndexes, objectStore, pipelineItems, type PipelineItem } from "@helios/core";
+import { db, ensureIndexes, objectStore, pipelineItems, UsageMeter, type PipelineItem } from "@helios/core";
 import { purgeHandler } from "../../src/handlers/purge";
 import type { HandlerContext } from "../../src/handlers/types";
 import { resetDb, startMongo, stopMongo } from "../../../core/test/helpers/mongo";
@@ -35,6 +35,7 @@ function contextFor(): HandlerContext {
 		slug: SLUG,
 		workDir: "/unused",
 		signal: new AbortController().signal,
+		meter: new UsageMeter(),
 		reportProgress: () => undefined
 	};
 }

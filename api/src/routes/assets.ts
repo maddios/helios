@@ -12,14 +12,14 @@ import {
 	findLiveAsset,
 	latestSceneAnalysis,
 	listAssets,
-	listTranscripts,
+	listTranscriptViews,
 	requestPurge,
 	setActiveStill,
 	toAssetViews
 } from "@helios/core";
 import { endpoint } from "../http/endpoint";
 import { reply } from "../http/reply";
-import { toSceneAnalysisView, toTranscriptView } from "../views/analysis";
+import { toSceneAnalysisView } from "../views/analysis";
 import { IdParams } from "./params";
 
 export const assetRoutes = [
@@ -83,11 +83,10 @@ export const assetRoutes = [
 		input: { params: IdParams },
 		responses: { 200: { description: "Transcripts", schema: AssetTranscriptsResponseSchema } },
 		errors: [404],
-		handle: async ({ account, input }) => {
-			await findLiveAsset(account._id, input.params.id);
-			const transcripts = await listTranscripts(account._id, input.params.id);
-			return reply.ok({ transcripts: transcripts.map(toTranscriptView) });
-		}
+		handle: async ({ account, input }) =>
+			reply.ok({
+				transcripts: await listTranscriptViews({ slug: account.slug, accountId: account._id, assetId: input.params.id })
+			})
 	}),
 	endpoint({
 		method: "get",

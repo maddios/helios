@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AssetOutputViewSchema, AssetViewSchema } from "./api/assets";
 import { RequestViewSchema } from "./api/requests";
+import { TranscriptFilesSchema } from "./transcript";
 import { ItemKindSchema, ItemStatusSchema } from "./statuses";
 
 export const WEBHOOK_SIGNATURE_HEADER = "Helios-Signature";
@@ -26,6 +27,14 @@ const WebhookItemSchema = z
 	})
 	.meta({ id: "WebhookItem" });
 
+const WebhookTranscriptSchema = z
+	.object({
+		language: z.string().describe("Language of the transcript"),
+		isTranslation: z.boolean().describe("Whether the transcript is a translation"),
+		urls: TranscriptFilesSchema.describe("CDN urls of the transcript files")
+	})
+	.meta({ id: "WebhookTranscript" });
+
 const ItemEventDataSchema = z
 	.object({
 		requestId: z.string().describe("Id of the request the item belongs to"),
@@ -34,7 +43,8 @@ const ItemEventDataSchema = z
 		outputs: z
 			.record(z.string(), AssetOutputViewSchema)
 			.optional()
-			.describe("Outputs the item produced, keyed by profile name, with CDN URLs")
+			.describe("Outputs the item produced, keyed by profile name, with CDN URLs"),
+		transcripts: z.array(WebhookTranscriptSchema).optional().describe("Transcripts the item produced, with CDN urls")
 	})
 	.meta({ id: "WebhookItemEventData" });
 

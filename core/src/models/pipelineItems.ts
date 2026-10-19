@@ -6,6 +6,7 @@ import {
 	ItemStatusSchema,
 	MediaAssetOutputSchema,
 	ItemQueueNameSchema,
+	TranscriptOutputSchema,
 	UsageSchema
 } from "@helios/contracts";
 import { db } from "../db";
@@ -14,7 +15,8 @@ export const PIPELINE_ITEM_TTL_SEC = 30 * 24 * 60 * 60;
 
 export const ItemOutputSchema = z.object({
 	assetOutputs: z.record(z.string(), MediaAssetOutputSchema).optional(),
-	activeStill: ActiveStillSchema.optional()
+	activeStill: ActiveStillSchema.optional(),
+	transcripts: z.array(TranscriptOutputSchema).optional()
 });
 export type ItemOutput = z.infer<typeof ItemOutputSchema>;
 

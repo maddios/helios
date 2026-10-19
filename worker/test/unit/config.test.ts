@@ -1,4 +1,5 @@
-import { config, fargateConfig, resetConfigForTests } from "../../src/config";
+import { resetAiConfigForTests } from "@helios/core";
+import { config, fargateConfig, resetConfigForTests, validateWorkerConfig } from "../../src/config";
 
 describe("worker config", () => {
 	afterEach(() => {
@@ -18,6 +19,62 @@ describe("worker config", () => {
 		resetConfigForTests();
 
 		expect(() => config()).toThrow(/VISIBILITY_EXTENSION_SEC: VISIBILITY_EXTENSION_SEC must be >= LEASE_SEC/);
+	});
+});
+
+describe("worker transcription config", () => {
+	afterEach(() => {
+		process.env.TRANSCRIBE_OVERLAP_SEC = "5";
+		process.env.TRANSCRIBE_MAX_UPLOAD_BYTES = String(20 * 1024 * 1024);
+		process.env.TRANSLATE_EFFORT = "low";
+		resetConfigForTests();
+	});
+
+	it("rejects an overlap that is not shorter than the chunk", () => {
+		process.env.TRANSCRIBE_OVERLAP_SEC = "1200";
+		resetConfigForTests();
+
+		expect(() => config()).toThrow(/TRANSCRIBE_OVERLAP_SEC must be < TRANSCRIBE_CHUNK_SEC/);
+	});
+
+	it("rejects an upload limit that cannot hold one chunk window plus its overlaps", () => {
+		process.env.TRANSCRIBE_MAX_UPLOAD_BYTES = String((1200 + 2 * 5) * 4000);
+		resetConfigForTests();
+
+		expect(() => config()).toThrow(/TRANSCRIBE_MAX_UPLOAD_BYTES/);
+	});
+
+	it("rejects an upload limit at or above the 25 MiB provider limit", () => {
+		process.env.TRANSCRIBE_MAX_UPLOAD_BYTES = String(25 * 1024 * 1024);
+		resetConfigForTests();
+
+		expect(() => config()).toThrow(/TRANSCRIBE_MAX_UPLOAD_BYTES must be < 25 MiB/);
+	});
+
+	it("rejects an unknown translation effort", () => {
+		process.env.TRANSLATE_EFFORT = "extreme";
+		resetConfigForTests();
+
+		expect(() => config()).toThrow(/TRANSLATE_EFFORT/);
+	});
+});
+
+describe("worker startup validation", () => {
+	afterEach(() => {
+		process.env.OPENAI_MAX_RETRY_AFTER_SEC = "30";
+		resetAiConfigForTests();
+		resetConfigForTests();
+	});
+
+	it("accepts the test environment", () => {
+		expect(() => validateWorkerConfig()).not.toThrow();
+	});
+
+	it("fails at startup when the AI config is missing a required setting", () => {
+		delete process.env.OPENAI_MAX_RETRY_AFTER_SEC;
+		resetAiConfigForTests();
+
+		expect(() => validateWorkerConfig()).toThrow(/OPENAI_MAX_RETRY_AFTER_SEC/);
 	});
 });
 

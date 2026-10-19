@@ -7,6 +7,7 @@ export const StoredTranscriptSchema = TranscriptSchema.extend({
 	_id: z.string(),
 	accountId: z.string(),
 	assetId: z.string(),
+	revision: z.int(),
 	createdAt: z.date()
 });
 export type StoredTranscript = z.infer<typeof StoredTranscriptSchema>;

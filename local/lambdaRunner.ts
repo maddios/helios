@@ -18,6 +18,7 @@ import {
 	resumeStuckRequests
 } from "@helios/core";
 import { analyzeHandler, callbackHandler, dlqHandler } from "../functions/src";
+import { validateWorkerConfig } from "../worker/src/config";
 import { handler as encoderHandler } from "../worker/src/lambda";
 import { applyLocalEnv, loadLocalConfig } from "./loadConfig";
 
@@ -192,6 +193,7 @@ export async function main(): Promise<void> {
 	applyLocalEnv(local, { e2e: false });
 	process.env.WORKER_TIER = "lambda";
 	process.env.AWS_LAMBDA_FUNCTION_MEMORY_SIZE = String(local.lambdas.memoryMb);
+	validateWorkerConfig();
 	await initDb(coreConfig().MONGO_URI);
 	const controller = new AbortController();
 	const stop = (): void => controller.abort(new Error("Lambda runner stopping"));

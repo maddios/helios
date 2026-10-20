@@ -73,7 +73,22 @@ export function buildOpenApiDocument(endpoints: AnyEndpoint[]) {
 		info: { title: "Helios API", version: "0.1.0", description: "Encoding and post-processing API" },
 		tags: [
 			{ name: "Destinations", description: eventbridgeGuide },
-			{ name: "Webhooks", description: webhooksGuide }
+			{ name: "Webhooks", description: webhooksGuide },
+			{
+				name: "Uploads",
+				description:
+					"Upload a file once, then store it or encode it. Small files get one presigned PUT; large files get a multipart upload whose parts can be re-signed and listed for resume. Complete with `store: true` to keep the file, or with `encode` to store and encode it. Stored image files can be transformed through `/img`."
+			},
+			{
+				name: "Files",
+				description:
+					"Stored files: list, get, delete, and store from a public URL. A from-url file is fetched asynchronously and reports `file.stored` or `file.failed` to the webhook."
+			},
+			{
+				name: "Account",
+				description:
+					"Account settings. The upload policy limits content types and size; an upload may narrow it per request but never widen it."
+			}
 		]
 	});
 }

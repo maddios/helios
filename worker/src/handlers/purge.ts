@@ -25,9 +25,6 @@ export async function purgeHandler({ asset, account, request }: HandlerContext):
 			)
 		)
 	).flat();
-	if (asset.source.type === "upload") {
-		originals.push(asset.source.key);
-	}
 	// Originals first: a render that re-caches after the listing sees its original gone and removes its variant.
 	await store.deleteKeys(originals);
 	await store.deleteKeys(await store.listKeys(resizeCachePrefix(account.slug, asset._id)));

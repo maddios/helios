@@ -1,4 +1,4 @@
-import type { ItemKind, ItemQueueName, ItemStatus, RequestStatus } from "@helios/contracts";
+import type { FileEventName, ItemKind, ItemQueueName, ItemStatus, RequestStatus } from "@helios/contracts";
 
 export interface Thresholds {
 	maxDurationSec: number;
@@ -27,7 +27,17 @@ export interface ItemMessage {
 export type CallbackDraft =
 	{ type: "item"; requestId: string; itemId: string } | { type: "request"; requestId: string };
 
-export type CallbackMessage = CallbackDraft & { sequence: number };
+export type RequestCallbackMessage = CallbackDraft & { sequence: number };
+
+export interface FileCallbackMessage {
+	type: "file";
+	accountId: string;
+	fileId: string;
+	event: FileEventName;
+	sequence: 1;
+}
+
+export type CallbackMessage = RequestCallbackMessage | FileCallbackMessage;
 
 export const TERMINAL_STATUSES = ["COMPLETE", "ERROR", "SKIPPED", "CANCELLED"] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];

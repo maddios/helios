@@ -1,4 +1,4 @@
-/** A part with its presigned PUT URL, as returned by `createMultipart` or `signParts`. */
+/** A part with its presigned PUT URL, as returned by `uploads.create` or `uploads.signParts`. */
 export interface PartUrl {
 	/** 1-based part number. */
 	partNumber: number;
@@ -17,24 +17,24 @@ export interface UploadedPart {
 }
 
 /**
- * The multipart upload the backend created with `uploads.createMultipart` and passed to the browser. The uploader reads
- * `partSizeBytes` and `parts`; `uploadId` and `uploadKey` travel with it so the backend can complete the upload.
+ * The multipart upload the backend created with `uploads.create` and passed to the browser. The uploader reads
+ * `partSizeBytes` and `parts`; `uploadId` and `fileId` travel with it so the backend can complete the upload.
  *
  * @example
- * const upload: MultipartUpload = { uploadId, uploadKey, partSizeBytes, parts };
+ * const upload: MultipartUpload = { uploadId, fileId, partSizeBytes, parts };
  */
 export interface MultipartUpload {
 	/** Multipart upload id. */
 	uploadId: string;
-	/** Storage key of the upload, which the backend passes to `completeMultipart`. */
-	uploadKey: string;
+	/** File id, which the backend passes to `uploads.complete`. */
+	fileId: string;
 	/** Size of every part except possibly the last, in bytes. */
 	partSizeBytes: number;
 	/** Presigned URL of each part, numbered from 1 to the planned part count. */
 	parts: PartUrl[];
 }
 
-/** A part storage accepted, as the backend passes it to `completeMultipart`. */
+/** A part storage accepted, as the backend passes it to `uploads.complete`. */
 export interface CompletedPart {
 	/** 1-based part number. */
 	partNumber: number;
@@ -88,14 +88,50 @@ export interface UploadSingleOptions {
 }
 
 /**
- * A presigned single PUT, as returned by `uploads.presign`.
+ * A presigned single PUT, as returned by `uploads.create` in single mode.
  *
  * @example
- * const presigned: PresignedUpload = { url, headers: { "content-type": "video/mp4" } };
+ * const presigned: PresignedUpload = created; // from uploads.create, passed by the backend
  */
 export interface PresignedUpload {
 	/** Presigned URL to PUT the file to. */
 	url: string;
-	/** Headers the signature covers, such as `content-type`. Sent as given. */
-	headers?: Record<string, string>;
+	/**
+	 * The headers the signature covers: `Content-Type` and `Content-Disposition`, exactly as `uploads.create` returned
+	 * them. The PUT sends these and no others, since any other header breaks the signature.
+	 */
+	headers: Record<string, string>;
+}
+
+/**
+ * What the backend passes to the browser: the result of `uploads.create`. `mode` says which uploader to call.
+ *
+ * @example
+ * const created: BrowserUpload = await fetch("/api/uploads", { method: "POST", body }).then((r) => r.json());
+ */
+export type BrowserUpload = SingleBrowserUpload | MultipartBrowserUpload;
+
+/** A single presigned PUT from `uploads.create`, with its mode, as the backend passes it to the browser. */
+export interface SingleBrowserUpload extends PresignedUpload {
+	/** The upload mode: one presigned PUT. */
+	mode: "single";
+	/** File id, which the backend passes to `uploads.complete`. */
+	fileId: string;
+}
+
+/** A multipart upload from `uploads.create`, with its mode, as the backend passes it to the browser. */
+export interface MultipartBrowserUpload extends MultipartUpload {
+	/** The upload mode: the file is sent in parts. */
+	mode: "multipart";
+}
+
+/**
+ * Result of {@link upload}. Multipart uploads return their parts, which the backend passes to `uploads.complete`.
+ *
+ * @example
+ * const { parts } = await upload(created, file);
+ */
+export interface BrowserUploadResult {
+	/** The uploaded parts, for a multipart upload. Absent for a single PUT. */
+	parts?: CompletedPart[];
 }

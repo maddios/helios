@@ -5,7 +5,6 @@ import { scriptedFetch } from "./helpers/fakeFetch.js";
 import { uploadsFor } from "./helpers/uploads.js";
 
 const BASE = { apiKey: "sk_live_options", baseUrl: "https://api.test" };
-const FIVE_GIB = 5 * 1024 * 1024 * 1024;
 
 function configurationErrorOf(action: () => unknown): ConfigurationError {
 	try {
@@ -54,14 +53,12 @@ describe("upload option bounds", () => {
 		["concurrency", { concurrency: 0 }],
 		["concurrency", { concurrency: 17 }],
 		["concurrency", { concurrency: 2.5 }],
-		["multipartThresholdBytes", { multipartThresholdBytes: 0 }],
-		["multipartThresholdBytes", { multipartThresholdBytes: FIVE_GIB + 1 }],
 		["partTimeoutMs", { partTimeoutMs: 0 }]
 	])("rejects %s %j before any request", async (name, option) => {
 		const scripted = scriptedFetch([]);
 
 		const error = await uploadsFor(scripted.fetch)
-			.upload(Buffer.from("abc"), { filename: "a.bin", ...option })
+			.upload(Buffer.from("abc"), { filename: "a.bin", contentType: "text/plain", store: true, ...option })
 			.catch((err: unknown) => err);
 
 		expect(error).toBeInstanceOf(ConfigurationError);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { DestinationInputSchema, DestinationPatchInputSchema, DestinationSchema } from "../destinations";
+import { UploadPolicySchema } from "./uploadPolicy";
 
 export const AccountFeaturesSchema = z.object({
 	peopleAttributes: z.boolean().describe("Whether people attribute extraction is enabled")
@@ -20,6 +21,7 @@ export const AccountViewSchema = z
 			"Default delivery destination; the webhook secret is never shown"
 		),
 		features: AccountFeaturesSchema.describe("Feature flags enabled for the account"),
+		uploadPolicy: UploadPolicySchema.describe("Upload policy in effect; the default applies until one is set"),
 		createdAt: z.iso.datetime().describe("When the account was created")
 	})
 	.meta({ id: "Account" });
@@ -35,7 +37,8 @@ export const CreateAccountRequestSchema = z
 		sourceBuckets: z.array(z.string()).default([]).describe("Buckets the account may encode sources from"),
 		features: AccountFeaturesSchema.partial()
 			.default({ peopleAttributes: false })
-			.describe("Feature flags to enable for the account")
+			.describe("Feature flags to enable for the account"),
+		uploadPolicy: UploadPolicySchema.optional().describe("Upload policy to set; the default applies when omitted")
 	})
 	.and(DestinationInputSchema)
 	.meta({ id: "CreateAccountRequest" });
@@ -50,7 +53,8 @@ export const UpdateAccountRequestSchema = z
 	.object({
 		name: z.string().min(1).optional().describe("New display name"),
 		sourceBuckets: z.array(z.string()).optional().describe("Buckets the account may encode sources from"),
-		features: AccountFeaturesSchema.partial().optional().describe("Feature flags to update")
+		features: AccountFeaturesSchema.partial().optional().describe("Feature flags to update"),
+		uploadPolicy: UploadPolicySchema.nullable().optional().describe("Upload policy to set; null restores the default")
 	})
 	.and(DestinationPatchInputSchema)
 	.meta({ id: "UpdateAccountRequest" });

@@ -14,7 +14,7 @@ const TEN_BYTES = 10;
 function upload(parts = 3): MultipartUpload {
 	return {
 		uploadId: "u1",
-		uploadKey: "acme/uploads/0b1c2d3e-0000-4000-8000-000000000001/clip.bin",
+		fileId: "f1",
 		partSizeBytes: PART,
 		parts: Array.from({ length: parts }, (_, index) => ({
 			partNumber: index + 1,

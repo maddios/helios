@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { IndexDescription } from "mongodb";
-import { DestinationSchema } from "@helios/contracts";
+import { DestinationSchema, UploadPolicySchema } from "@helios/contracts";
 import { db } from "../db";
 
 export const AccountSchema = z.object({
@@ -14,6 +14,7 @@ export const AccountSchema = z.object({
 	features: z.object({
 		peopleAttributes: z.boolean()
 	}),
+	uploadPolicy: UploadPolicySchema.optional(),
 	createdAt: z.date()
 });
 export type Account = z.infer<typeof AccountSchema>;

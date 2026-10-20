@@ -39,20 +39,27 @@ const ROUTES: [string, Invoke, string, string][] = [
 		"POST",
 		"/requests/r1/callbacks/redeliver"
 	],
-	["uploads.presign", (h) => h.uploads.presign({ filename: "a.jpg", sizeBytes: 1 }), "POST", "/uploads/presigned"],
 	[
-		"uploads.createMultipart",
-		(h) => h.uploads.createMultipart({ filename: "a.mp4", sizeBytes: 1 }),
+		"uploads.create",
+		(h) => h.uploads.create({ filename: "a.jpg", sizeBytes: 1, contentType: "image/jpeg" }),
 		"POST",
-		"/uploads/multipart"
+		"/uploads"
 	],
+	["uploads.complete", (h) => h.uploads.complete("f1", { store: true }), "POST", "/uploads/f1/complete"],
+	["uploads.signParts encodes the file id", (h) => h.uploads.signParts("f 1", [1]), "POST", "/uploads/f%201/parts"],
+	["uploads.listParts", (h) => h.uploads.listParts("f1"), "GET", "/uploads/f1/parts"],
+	["uploads.abort", (h) => h.uploads.abort("f1"), "DELETE", "/uploads/f1"],
+	["files.list", (h) => h.files.list({ externalId: "x" }), "GET", "/files?externalId=x"],
+	["files.get", (h) => h.files.get("f1"), "GET", "/files/f1"],
+	["files.delete", (h) => h.files.delete("f1"), "DELETE", "/files/f1"],
+	["files.fromUrl", (h) => h.files.fromUrl({ url: "https://example.test/a.png" }), "POST", "/files/from-url"],
+	["account.getUploadPolicy", (h) => h.account.getUploadPolicy(), "GET", "/account/upload-policy"],
 	[
-		"uploads.abortMultipart encodes the key",
-		(h) => h.uploads.abortMultipart("u1", "uploads/a/b.mp4"),
-		"DELETE",
-		"/uploads/multipart/u1?uploadKey=uploads%2Fa%2Fb.mp4"
+		"account.setUploadPolicy",
+		(h) => h.account.setUploadPolicy({ allowedContentTypes: ["image/*"], maxBytes: 10 }),
+		"PATCH",
+		"/account/upload-policy"
 	],
-	["files.create", (h) => h.files.create({ filename: "brief.pdf" }), "POST", "/files"],
 	["account.getDestination", (h) => h.account.getDestination(), "GET", "/account/destination"],
 	["account.setDestination", (h) => h.account.setDestination(null), "PUT", "/account/destination"],
 	["destinations.test", (h) => h.destinations.test(), "POST", "/destinations/test"],

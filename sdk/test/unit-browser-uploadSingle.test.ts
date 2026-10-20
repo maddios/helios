@@ -29,7 +29,7 @@ describe("uploadSingle", () => {
 	it("rejects a rejected PUT with upload_failed and its status, without retrying", async () => {
 		run = installFakeXhr(() => ({ status: 403 }));
 
-		const err = await uploadSingle({ url: URL_ }, new Blob(["x"])).catch((caught: unknown) => caught);
+		const err = await uploadSingle({ url: URL_, headers: {} }, new Blob(["x"])).catch((caught: unknown) => caught);
 
 		expect(err).toBeInstanceOf(BrowserUploadError);
 		expect(err).toMatchObject({ code: "upload_failed", status: 403 });
@@ -41,7 +41,7 @@ describe("uploadSingle", () => {
 		const controller = new AbortController();
 		setTimeout(() => controller.abort(), 10);
 
-		const err = await uploadSingle({ url: URL_ }, new Blob(["x"]), { signal: controller.signal }).catch(
+		const err = await uploadSingle({ url: URL_, headers: {} }, new Blob(["x"]), { signal: controller.signal }).catch(
 			(caught: unknown) => caught
 		);
 

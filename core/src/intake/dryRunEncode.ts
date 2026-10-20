@@ -6,7 +6,7 @@ import {
 	type SourceMetadata
 } from "@helios/contracts";
 import { analyzeConfig, probeSource } from "../analyze";
-import { config } from "../config";
+import { sourceLocation } from "../assets";
 import { dryRunPreset, resolvePreset } from "../presetAdmin";
 import { resolvePostProcess } from "../pipeline";
 import type { Account } from "../models";
@@ -31,7 +31,7 @@ async function probeEncodeSource(account: Account, source: EncodeSource): Promis
 	if (stored.type === "url") {
 		throw new ValidationError("A url source needs sourceMetadata for a dry run");
 	}
-	const bucket = stored.type === "s3" ? stored.bucket : config().MEDIA_BUCKET;
-	const url = await objectStore().presignGet(bucket, stored.key, analyzeConfig().SOURCE_URL_TTL_SEC);
+	const { bucket, key } = sourceLocation(stored);
+	const url = await objectStore().presignGet(bucket, key, analyzeConfig().SOURCE_URL_TTL_SEC);
 	return probeSource(url);
 }

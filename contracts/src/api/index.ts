@@ -3,6 +3,7 @@ export * from "./health";
 export * from "./encode";
 export * from "./reencode";
 export * from "./postProcessAsset";
+export * from "./uploadPolicy";
 export * from "./uploads";
 export * from "./files";
 export * from "./assets";

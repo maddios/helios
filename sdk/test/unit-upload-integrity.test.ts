@@ -8,18 +8,27 @@ import { json, routedFetch, type Call } from "./helpers/fakeFetch.js";
 const STORAGE = "https://s3.test";
 const NO_CONTENT = (): Response => new Response(null, { status: 204 });
 
+const FILE_ID = "0b1c2d3e-0000-4000-8000-000000000001";
+const EXPIRES_AT = "2026-10-20T06:00:00.000Z";
+
 function createdFor(partSizeBytes: number, count: number) {
 	return {
+		mode: "multipart",
+		fileId: FILE_ID,
+		key: `acme/files/${FILE_ID}/a.bin`,
 		uploadId: "u1",
-		uploadKey: "uploads/acme/clip.bin",
 		partSizeBytes,
-		parts: Array.from({ length: count }, (_, index) => ({ partNumber: index + 1, url: `${STORAGE}/part/${index + 1}` }))
+		parts: Array.from({ length: count }, (_, index) => ({
+			partNumber: index + 1,
+			url: `${STORAGE}/part/${index + 1}`
+		})),
+		expiresAt: EXPIRES_AT
 	};
 }
 
 function multipartFetch(partSizeBytes: number, count: number) {
 	return routedFetch((call: Call) => {
-		if (call.method === "POST") return json(201, createdFor(partSizeBytes, count));
+		if (call.method === "POST" && call.url.endsWith("/uploads")) return json(201, createdFor(partSizeBytes, count));
 		if (call.method === "PUT") return new Response(null, { status: 200, headers: { etag: '"e"' } });
 		return NO_CONTENT();
 	});
@@ -30,16 +39,30 @@ function methodsOf(calls: Call[]): string[] {
 }
 
 describe("upload size integrity", () => {
-	it("rejects a single PUT whose stream yields fewer bytes than declared, before presigning", async () => {
-		const { fetch, calls } = routedFetch(() => json(201, {}));
+	it("rejects a single PUT whose stream yields fewer bytes than declared, before sending any bytes", async () => {
+		const { fetch, calls } = routedFetch(() =>
+			json(201, {
+				mode: "single",
+				fileId: FILE_ID,
+				key: "k",
+				url: `${STORAGE}/put`,
+				headers: {},
+				expiresAt: EXPIRES_AT
+			})
+		);
 
 		const error = await clientWith(fetch)
-			.uploads.upload(Readable.from([Buffer.from("abc")]), { filename: "a.bin", sizeBytes: 5 })
+			.uploads.upload(Readable.from([Buffer.from("abc")]), {
+				filename: "a.bin",
+				sizeBytes: 5,
+				contentType: "application/octet-stream",
+				store: true
+			})
 			.catch((err: unknown) => err);
 
 		expect(error).toBeInstanceOf(UploadError);
 		expect(error).toMatchObject({ code: "size_mismatch" });
-		expect(calls).toHaveLength(0);
+		expect(methodsOf(calls)).toEqual(["POST"]);
 	});
 
 	it("rejects a multipart stream whose byte count differs from the declared size, and aborts the upload", async () => {
@@ -49,7 +72,8 @@ describe("upload size integrity", () => {
 			.uploads.upload(Readable.from([Buffer.from("0123"), Buffer.from("456789")]), {
 				filename: "a.bin",
 				sizeBytes: 12,
-				multipartThresholdBytes: 4
+				contentType: "application/octet-stream",
+				store: true
 			})
 			.catch((err: unknown) => err);
 
@@ -68,7 +92,12 @@ describe("upload size integrity", () => {
 		});
 
 		const error = await clientWith(fetch)
-			.uploads.upload(failing, { filename: "a.bin", sizeBytes: 12, multipartThresholdBytes: 4 })
+			.uploads.upload(failing, {
+				filename: "a.bin",
+				sizeBytes: 12,
+				contentType: "application/octet-stream",
+				store: true
+			})
 			.catch((err: unknown) => err);
 
 		expect(error).toMatchObject({ message: "disk gone" });
@@ -77,13 +106,16 @@ describe("upload size integrity", () => {
 });
 
 describe("caller cancellation", () => {
-	it("passes an already aborted signal to presign and does not send the request", async () => {
+	it("passes an already aborted signal to create and does not send the request", async () => {
 		const { fetch, calls } = routedFetch(() => json(201, {}));
 		const controller = new AbortController();
 		controller.abort();
 
 		await expect(
-			clientWith(fetch).uploads.presign({ filename: "a.bin", sizeBytes: 1 }, { signal: controller.signal })
+			clientWith(fetch).uploads.create(
+				{ filename: "a.bin", sizeBytes: 1, contentType: "image/png" },
+				{ signal: controller.signal }
+			)
 		).rejects.toBeInstanceOf(AbortedError);
 		expect(calls).toHaveLength(0);
 	});

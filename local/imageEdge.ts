@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import express, { type Request, type Response } from "express";
 import { GetObjectCommand, S3Client, S3ServiceException } from "@aws-sdk/client-s3";
-import { config as coreConfig, logger } from "@helios/core";
+import { config as coreConfig, EDGE_RESPONSE_HEADERS, logger } from "@helios/core";
 import { handler as imageHandler, type ImageResponse } from "../functions/src/image/handler";
 import { handler as edgeHandler, type EdgeRequest, type EdgeResponse } from "../infra/edge/imgRewrite";
 import { applyLocalEnv, loadLocalConfig } from "./loadConfig";
@@ -76,6 +76,7 @@ function toEdgeRequest(req: Request): EdgeRequest {
 }
 
 function sendEdgeResponse(res: Response, response: EdgeResponse): void {
+	setEdgeHeaders(res);
 	for (const [name, header] of Object.entries(response.headers)) {
 		res.setHeader(name, header.value);
 	}
@@ -109,7 +110,14 @@ async function readVariant({ s3, bucket }: Deps, uri: string): Promise<Bytes | u
 	}
 }
 
+function setEdgeHeaders(res: Response): void {
+	for (const [name, value] of Object.entries(EDGE_RESPONSE_HEADERS)) {
+		res.setHeader(name, value);
+	}
+}
+
 function sendBytes(res: Response, status: number, { body, contentType, cacheControl }: Bytes): void {
+	setEdgeHeaders(res);
 	if (contentType !== undefined) {
 		res.setHeader("content-type", contentType);
 	}
@@ -120,6 +128,7 @@ function sendBytes(res: Response, status: number, { body, contentType, cacheCont
 }
 
 function sendLambdaResponse(res: Response, response: ImageResponse): void {
+	setEdgeHeaders(res);
 	for (const [name, value] of Object.entries(response.headers ?? {})) {
 		res.setHeader(name, value);
 	}

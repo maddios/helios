@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Helios media bucket with browser upload CORS (PUT/GET/HEAD, ETag exposed) for presigned multipart parts
+Description: Helios media bucket with browser upload CORS (PUT/GET/HEAD, ETag exposed) and a lifecycle rule that aborts stale multipart uploads
 
 Parameters:
   Stage:
@@ -25,6 +25,13 @@ Resources:
             AllowedHeaders: ["*"]
             ExposedHeaders: [ETag]
             MaxAge: 3000
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-multipart-uploads
+            Status: Enabled
+            Prefix: ""
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
 
 Outputs:
   Bucket:

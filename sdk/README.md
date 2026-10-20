@@ -14,7 +14,7 @@ Requires Node.js 18.17 or later. The package is published with restricted access
 
 ## Quickstart
 
-Create a client, upload a file, start the encode and wait for it to finish.
+Create a client, upload a file and encode it in one call, then wait for the encode to finish.
 
 ```ts
 import { Helios } from "@partnrup/helios-sdk";
@@ -25,17 +25,18 @@ const helios = new Helios({
 	baseUrl: requireEnv("HELIOS_BASE_URL")
 });
 
-const { uploadKey, request } = await helios.uploads.uploadAndEncode(requireEnv("MEDIA_PATH"), {
-	preset: "generic",
+const { file, request } = await helios.uploads.upload(requireEnv("MEDIA_PATH"), {
+	contentType: "video/mp4",
+	encode: { preset: "generic" },
 	onProgress: ({ uploadedBytes, totalBytes }) => console.log(`uploaded ${uploadedBytes} of ${totalBytes} bytes`)
 });
 
-const done = await helios.requests.wait(request.id, { timeoutMs: 10 * 60_000 });
+const done = await helios.requests.wait(request!.id, { timeoutMs: 10 * 60_000 });
 if (done.status === "ERROR") {
 	throw new Error(`Encode failed (${done.error?.code}): ${done.error?.message}`);
 }
 
-console.log(uploadKey, request.assetId, done.status);
+console.log(file.id, request!.assetId, done.status);
 ```
 
 Helios signs every webhook with the account's webhook secret. Verify the raw request body before you parse it. The route must use `express.raw`, because a global JSON parser would consume the body first.
@@ -320,11 +321,128 @@ for (const day of usage.days) {
 }
 ```
 
+### Store a file
+
+`uploads.upload` stores a file and keeps it, with no encode. Small files go in one PUT and large files in parts; the SDK follows the server's choice. The stored file has a CDN `url`, and image files also report their dimensions. `images.url` builds a transformed URL for any image file key.
+
+```ts
+import { Helios } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL"),
+	imageBaseUrl: requireEnv("HELIOS_IMAGE_BASE_URL")
+});
+
+const { file } = await helios.uploads.upload(requireEnv("MEDIA_PATH"), {
+	contentType: "image/png",
+	externalId: "logo-42",
+	store: true
+});
+
+const thumbnail = helios.images.url(file.key, { w: 320, h: 180 });
+console.log(file.id, file.url, file.image, thumbnail);
+```
+
+### Encode a stored file later
+
+A stored file can be encoded any time, as many times as you like. The encode reads the stored file in place, and the file itself is kept.
+
+```ts
+import { Helios } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL")
+});
+
+const request = await helios.encodes.create({
+	source: { fileId: requireEnv("FILE_ID") },
+	preset: "generic"
+});
+
+const done = await helios.requests.wait(request.id, { timeoutMs: 10 * 60_000 });
+console.log(request.assetId, done.status);
+```
+
+### Store a file from a URL
+
+`files.fromUrl` makes Helios fetch a public URL. The file is `PENDING` until the fetch finishes, then `STORED` or `FAILED`. The webhook receives `file.stored` or `file.failed`, and the fetch uses the same SSRF guard as encodes from a URL.
+
+```ts
+import { Helios } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL")
+});
+
+const pending = await helios.files.fromUrl({ url: "https://example.com/logo.png", externalId: "logo-42" });
+
+let file = pending;
+while (file.status === "PENDING") {
+	await new Promise((resolve) => setTimeout(resolve, 2_000));
+	file = await helios.files.get(pending.id);
+}
+
+console.log(file.status, file.url, file.error);
+```
+
+### Delete a file
+
+`files.delete` removes the object, its cached image variants and its CDN copies, and answers 200 with `{ fileId }`. The file answers 404 from the API straight away. While a request that has not finished reads the file, the call answers 409 `file_in_use`.
+
+```ts
+import { Helios } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL")
+});
+
+await helios.files.delete(requireEnv("FILE_ID"));
+console.log("deleted; its CDN copies are invalidated");
+```
+
+### Upload policy
+
+The account upload policy limits the content types and the size of its uploads. A request may narrow the policy for one upload but never widen it. Storage checks the bytes too: a file whose content does not match its declared image or video type is rejected with a 422 `policy_violation`.
+
+```ts
+import { Helios, UnprocessableError } from "@partnrup/helios-sdk";
+import { requireEnv } from "./requireEnv.js";
+
+const helios = new Helios({
+	apiKey: requireEnv("HELIOS_API_KEY"),
+	baseUrl: requireEnv("HELIOS_BASE_URL")
+});
+
+await helios.account.setUploadPolicy({ allowedContentTypes: ["image/*", "video/mp4"], maxBytes: 5 * 1024 ** 3 });
+
+try {
+	await helios.uploads.upload(requireEnv("MEDIA_PATH"), {
+		contentType: "image/png",
+		policy: { allowedContentTypes: ["image/png"], maxBytes: 10 * 1024 ** 2 },
+		store: true
+	});
+} catch (err) {
+	if (err instanceof UnprocessableError) {
+		console.log("rejected by policy:", err.code, err.message);
+	} else {
+		throw err;
+	}
+}
+```
+
 ### Browser uploads (backend + browser)
 
 Large files go from the browser straight to storage, so the file never passes through your backend. The backend keeps the secret key. It creates the multipart upload, re-signs parts whose URLs expired, lists the parts storage already holds so an interrupted upload can resume, and completes the upload. The page uses `@partnrup/helios-sdk/browser`, which holds no key and reports progress through XHR.
 
-The backend handles four routes: start (`startBrowserUpload`), stored parts (`storedBrowserParts`), renew (`renewBrowserParts`) and finish (`finishBrowserUpload`). Protect these routes as you protect the rest of your API. The example leaves that to your app.
+The backend handles five routes: start (`startBrowserUpload`), stored parts (`storedBrowserParts`), renew (`renewBrowserParts`), finish (`finishBrowserUpload`, which stores the file, or `finishBrowserUploadAndEncode`, which also encodes it) and abandon (`abandonBrowserUpload`). Protect these routes as you protect the rest of your API. The example leaves that to your app.
 
 ```ts
 import { Helios } from "@partnrup/helios-sdk";
@@ -336,30 +454,34 @@ const helios = new Helios({
 });
 
 export async function startBrowserUpload(filename: string, sizeBytes: number) {
-	return helios.uploads.createMultipart({ filename, sizeBytes, contentType: "video/mp4" });
+	return helios.uploads.create({ filename, sizeBytes, contentType: "video/mp4" });
 }
 
-export async function renewBrowserParts(uploadId: string, uploadKey: string, partNumbers: number[]) {
-	return helios.uploads.signParts(uploadId, uploadKey, partNumbers);
+export async function renewBrowserParts(fileId: string, partNumbers: number[]) {
+	return (await helios.uploads.signParts(fileId, partNumbers)).parts;
 }
 
-export async function storedBrowserParts(uploadId: string, uploadKey: string) {
-	return (await helios.uploads.listParts(uploadId, uploadKey)).parts;
+export async function storedBrowserParts(fileId: string) {
+	return (await helios.uploads.listParts(fileId)).parts;
 }
 
-export async function finishBrowserUpload(
-	uploadId: string,
-	uploadKey: string,
-	parts: { partNumber: number; etag: string }[]
-) {
-	return helios.uploads.completeMultipart(uploadId, { uploadKey, parts });
+export async function finishBrowserUpload(fileId: string, parts: { partNumber: number; etag: string }[]) {
+	return helios.uploads.complete(fileId, { parts, store: true });
+}
+
+export async function finishBrowserUploadAndEncode(fileId: string, parts: { partNumber: number; etag: string }[]) {
+	return helios.uploads.complete(fileId, { parts, encode: { preset: "generic" } });
+}
+
+export async function abandonBrowserUpload(fileId: string) {
+	return helios.uploads.abort(fileId);
 }
 ```
 
-In the page, pass the upload from your start route. The uploader slices the file, sends the parts with bounded concurrency, retries network errors, and renews a part whose URL expired (403).
+In the page, pass the `created` result of your start route to `upload`. It sends a single PUT or the parts, depending on the mode the server chose, with bounded concurrency. It retries network errors and renews a part whose URL expired (403). For a multipart upload it returns the parts, which the finish route passes on. A resumed upload passes the parts already stored, from `storedBrowserParts`.
 
 ```ts
-import { uploadParts, type MultipartUpload, type PartUrl, type UploadedPart } from "@partnrup/helios-sdk/browser";
+import { upload, type BrowserUpload, type PartUrl, type UploadedPart } from "@partnrup/helios-sdk/browser";
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
 	const res = await fetch(path, {
@@ -372,17 +494,21 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 export async function uploadVideo(
 	file: Blob,
-	upload: MultipartUpload,
+	created: BrowserUpload,
 	onProgress: (fraction: number) => void
 ): Promise<void> {
-	const uploadedParts = await postJson<UploadedPart[]>("/api/uploads/stored", upload);
-	const parts = await uploadParts(upload, file, {
+	const { parts } = await upload(created, file, {
 		concurrency: 4,
-		uploadedParts,
 		onProgress: ({ uploadedBytes, totalBytes }) => onProgress(uploadedBytes / totalBytes),
-		signParts: (partNumbers) => postJson<PartUrl[]>("/api/uploads/renew", { ...upload, partNumbers })
+		signParts: (partNumbers) => postJson<PartUrl[]>("/api/uploads/renew", { fileId: created.fileId, partNumbers })
 	});
-	await postJson("/api/uploads/finish", { ...upload, parts });
+	await postJson("/api/uploads/finish", { fileId: created.fileId, parts });
+}
+
+export async function resumeVideo(file: Blob, created: BrowserUpload): Promise<void> {
+	const uploadedParts = await postJson<UploadedPart[]>("/api/uploads/stored", { fileId: created.fileId });
+	const { parts } = await upload(created, file, { uploadedParts });
+	await postJson("/api/uploads/finish", { fileId: created.fileId, parts });
 }
 ```
 
@@ -403,12 +529,12 @@ Every error the SDK throws is a `HeliosError` with `code`, `status` (absent when
 | `ServiceUnavailableError`                           | 503                                                                        |
 | `ApiError`                                          | Any other error response                                                   |
 | `ConnectionError` / `TimeoutError` / `AbortedError` | No response, a timeout or `requests.wait` giving up, or your `AbortSignal` |
-| `UploadError` / `UploadEncodeError`                 | Storage rejected the upload, or the upload is stored but its encode failed |
+| `UploadError`                                       | Storage rejected a part, or the size does not match the declared size      |
 | `WebhookError` / `ConfigurationError`               | Signature or payload check failed; invalid client options                  |
 
 Retries follow each method's mode. Idempotent calls (GETs, PUTs, DELETEs and keyed creates) retry 429, 5xx, network errors and timeouts, up to `maxRetries` (default 3). Other writes retry only on 429, so a failed write is never silently repeated. Create calls send one `requestId` per call, which every retry reuses. To make a create safe across process restarts, pass your own `requestId` (a UUID) and store it with your job.
 
-`UploadEncodeError` means the bytes are stored, and only the encode failed. Its `uploadKey` lets you start the encode again without uploading again.
+A file that fails the storage check (its bytes do not match its declared type, or it breaks the upload policy) is rejected with a 422 `policy_violation`, and its object is deleted. When `uploads.complete` fails after the bytes were sent, `upload` throws an `UploadCompleteError`. It carries the `fileId` and the API error's `code` and `status`, so call `uploads.complete(fileId, ...)` again to retry without uploading twice. A second complete with different encode options answers 409 `complete_conflict`; for another encode of a stored file, use `encodes.create({ source: { fileId } })`.
 
 ```ts
 import {
@@ -417,7 +543,7 @@ import {
 	HeliosError,
 	RateLimitError,
 	TimeoutError,
-	UploadEncodeError
+	UnprocessableError
 } from "@partnrup/helios-sdk";
 import { requireEnv } from "./requireEnv.js";
 
@@ -427,15 +553,18 @@ const helios = new Helios({
 });
 
 try {
-	const { request } = await helios.uploads.uploadAndEncode(requireEnv("MEDIA_PATH"), { preset: "generic" });
-	await helios.requests.wait(request.id, { timeoutMs: 10 * 60_000 });
+	const { request } = await helios.uploads.upload(requireEnv("MEDIA_PATH"), {
+		contentType: "video/mp4",
+		encode: { preset: "generic" }
+	});
+	await helios.requests.wait(request!.id, { timeoutMs: 10 * 60_000 });
 } catch (err) {
-	if (err instanceof UploadEncodeError) {
-		console.log("upload stored as", err.uploadKey, "- encode it again without re-uploading");
+	if (err instanceof UnprocessableError && err.code === "policy_violation") {
+		console.log("the file does not match its declared type or the upload policy");
 	} else if (err instanceof RateLimitError) {
 		console.log("rate limited for", err.retryAfterMs, "ms");
 	} else if (err instanceof ConflictError) {
-		console.log("conflict", err.code);
+		console.log("conflict", err.code, "- complete the file again with the same fileId");
 	} else if (err instanceof TimeoutError) {
 		console.log("still running; keep the request id and poll later");
 	} else if (err instanceof HeliosError) {

@@ -4,10 +4,12 @@ import { callbackDeliveries, type CallbackDelivery } from "../models";
 type Attempt = CallbackDelivery["attempts"][number];
 type DestinationType = CallbackDelivery["destinationType"];
 
+export type DeliverySubject = { requestId: string } | { fileId: string };
+
 export async function openDelivery(
 	id: string,
 	event: WebhookEvent,
-	requestId: string,
+	subject: DeliverySubject,
 	accountId: string,
 	destinationType: DestinationType,
 	now: Date
@@ -16,7 +18,7 @@ export async function openDelivery(
 		{ _id: id },
 		{
 			$setOnInsert: {
-				requestId,
+				...subject,
 				accountId,
 				event: event.event,
 				status: "PENDING",

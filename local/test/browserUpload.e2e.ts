@@ -16,7 +16,14 @@ import {
 	requests,
 	seedSystemPreset
 } from "@helios/core";
-import { uploadParts, type CompletedPart, type MultipartUpload, type PartUrl } from "../../sdk/src/browser/index";
+import {
+	upload as uploadBrowser,
+	uploadParts,
+	type BrowserUpload,
+	type CompletedPart,
+	type MultipartUpload,
+	type PartUrl
+} from "../../sdk/src/browser/index";
 import { createApp } from "../../api/src/app";
 import { bootstrap } from "../bootstrap";
 import { FIXTURE_DIR, generateFixtures } from "../fixtures";
@@ -30,6 +37,7 @@ const FILE_BYTES = 12 * MiB;
 const FIXTURE = "h300.mp4";
 const [ORIGIN] = local.uploadAllowedOrigins;
 const POST_PROCESS_OFF = { transcribe: false, sceneDetection: false } as const;
+const SMALL_TEXT = "a small note stored with one presigned PUT\n";
 const TEST_TIMEOUT_MS = 200000;
 const slug = `e2e-browser-${randomUUID().slice(0, 8)}`;
 const globals = globalThis as unknown as { XMLHttpRequest?: unknown };
@@ -60,10 +68,7 @@ async function call(method: string, urlPath: string, key: string, body?: unknown
 const account = (method: string, urlPath: string, body?: unknown) => call(method, urlPath, accountKey, body);
 
 function signParts(partNumbers: number[]): Promise<PartUrl[]> {
-	return account("POST", `/uploads/multipart/${upload.uploadId}/parts`, {
-		uploadKey: upload.uploadKey,
-		partNumbers
-	}).then((res) => res.body?.parts);
+	return account("POST", `/uploads/${upload.fileId}/parts`, { partNumbers }).then((res) => res.body?.parts);
 }
 
 function withFreePadding(bytes: Buffer, totalSize: number): Buffer {
@@ -117,9 +122,31 @@ afterAll(async () => {
 	await closeDb();
 });
 
-describe("browser multipart upload against LocalStack", () => {
+describe("browser uploads against LocalStack", () => {
+	it("stores a small file through one presigned PUT sent by the browser upload helper", async () => {
+		const created = await account("POST", "/uploads", {
+			filename: "note.txt",
+			sizeBytes: Buffer.byteLength(SMALL_TEXT),
+			contentType: "text/plain"
+		});
+		const browserUpload = { ...created.body, mode: "single" } as BrowserUpload;
+
+		const result = await uploadBrowser(browserUpload, new Blob([SMALL_TEXT]));
+		const stored = await account("POST", `/uploads/${created.body?.fileId}/complete`, { store: true });
+
+		expect(created.status).toBe(201);
+		expect(created.body?.mode).toBe("single");
+		expect(result).toEqual({});
+		expect(stored.status).toBe(200);
+		expect(stored.body?.file).toMatchObject({
+			status: "STORED",
+			contentType: "text/plain",
+			sizeBytes: Buffer.byteLength(SMALL_TEXT)
+		});
+	});
+
 	it("creates a multipart upload with 5 MiB parts and lets the dev origin preflight PUT", async () => {
-		const res = await account("POST", "/uploads/multipart", {
+		const res = await account("POST", "/uploads", {
 			filename: FIXTURE,
 			sizeBytes: FILE_BYTES,
 			contentType: "video/mp4"
@@ -156,12 +183,9 @@ describe("browser multipart upload against LocalStack", () => {
 	});
 
 	it(
-		"resumes from listParts, re-signs an expired part, and completes the upload without encoding",
+		"resumes from listParts, re-signs an expired part, and stores the file",
 		async () => {
-			const listed = await account(
-				"GET",
-				`/uploads/multipart/${upload.uploadId}/parts?uploadKey=${encodeURIComponent(upload.uploadKey)}`
-			);
+			const listed = await account("GET", `/uploads/${upload.fileId}/parts`);
 			const expiredUrl = upload.parts[2].url;
 			let expired = false;
 			FetchXhr.interceptor = (url) => {
@@ -184,10 +208,7 @@ describe("browser multipart upload against LocalStack", () => {
 				onProgress: ({ uploadedBytes }) => progress.push(uploadedBytes)
 			});
 			FetchXhr.interceptor = undefined;
-			const done = await account("POST", `/uploads/multipart/${upload.uploadId}/complete`, {
-				uploadKey: upload.uploadKey,
-				parts: completed
-			});
+			const done = await account("POST", `/uploads/${upload.fileId}/complete`, { parts: completed, store: true });
 
 			expect(listed.body?.parts).toEqual([{ partNumber: 1, etag: firstPartEtag, sizeBytes: 5 * MiB }]);
 			expect(reSigned).toEqual([3]);
@@ -195,25 +216,34 @@ describe("browser multipart upload against LocalStack", () => {
 			expect(completed[0].etag).toBe(firstPartEtag);
 			expect(progress.at(-1)).toBe(FILE_BYTES);
 			expect(done.status).toBe(200);
-			expect(done.body).toEqual({ uploadKey: upload.uploadKey });
+			expect(done.body?.file).toMatchObject({ status: "STORED", contentType: "video/mp4", sizeBytes: FILE_BYTES });
 		},
 		TEST_TIMEOUT_MS
 	);
 
 	it(
-		"encodes the completed upload later by its uploadKey",
+		"encodes a multipart upload on completion, with the file as the encode source",
 		async () => {
-			const encoded = await account("POST", "/encode", {
-				source: { uploadKey: upload.uploadKey },
-				preset: "generic",
-				postProcess: POST_PROCESS_OFF,
-				analyze: "sync"
+			const res = await account("POST", "/uploads", {
+				filename: FIXTURE,
+				sizeBytes: FILE_BYTES,
+				contentType: "video/mp4"
 			});
-			const requestId: string = encoded.body?.id;
-			await drainUntilTerminal([requestId]);
+			const multipart = res.body as MultipartUpload;
+			const completed: CompletedPart[] = await uploadParts(multipart, new Blob([file]), {
+				signParts: async (partNumbers) =>
+					(await account("POST", `/uploads/${multipart.fileId}/parts`, { partNumbers })).body?.parts
+			});
 
-			expect(encoded.status).toBe(201);
-			expect((await requests().findOne({ _id: requestId }))?.status).toBe("COMPLETE");
+			const done = await account("POST", `/uploads/${multipart.fileId}/complete`, {
+				parts: completed,
+				encode: { preset: "generic", analyze: "sync", postProcess: POST_PROCESS_OFF }
+			});
+			await drainUntilTerminal([done.body?.request?.id]);
+
+			expect(done.status).toBe(201);
+			expect(done.body?.file.status).toBe("STORED");
+			expect((await requests().findOne({ _id: done.body?.request?.id }))?.status).toBe("COMPLETE");
 		},
 		TEST_TIMEOUT_MS
 	);

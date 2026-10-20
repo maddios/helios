@@ -11,6 +11,7 @@ import {
 	config as coreConfig,
 	dlqName,
 	drainCdnInvalidations,
+	expirePendingFiles,
 	fullQueueName,
 	initDb,
 	logger,
@@ -77,7 +78,7 @@ export async function runLambdaSources({
 		),
 		runLoop(signal, async () => {
 			const now = new Date();
-			await Promise.all([resumeStuckRequests(now), drainCdnInvalidations(now)]);
+			await Promise.all([resumeStuckRequests(now), drainCdnInvalidations(now), expirePendingFiles(now)]);
 			await sleep(local.lambdas.resumeIntervalSec * 1000, signal);
 		})
 	]);

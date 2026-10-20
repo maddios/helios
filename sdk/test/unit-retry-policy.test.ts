@@ -1,14 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { HeliosAdmin } from "../src/admin/client.js";
 import { Helios } from "../src/client.js";
-import {
-	ApiError,
-	ConnectionError,
-	RateLimitError,
-	ServiceUnavailableError,
-	UploadEncodeError,
-	type HeliosError
-} from "../src/index.js";
+import { ApiError, ConnectionError, RateLimitError, ServiceUnavailableError, type HeliosError } from "../src/index.js";
 import { clientWith } from "./helpers/client.js";
 import { apiError, bodyText, json, scriptedFetch, type Responder, type ScriptedFetch } from "./helpers/fakeFetch.js";
 
@@ -39,27 +32,25 @@ const METHODS: [string, Mode, Invoke][] = [
 	["requests.cancel", "idempotent", (h) => h.requests.cancel("r1")],
 	["requests.callbacks.list", "idempotent", (h) => h.requests.callbacks.list("r1")],
 	["requests.callbacks.redeliver", "rateLimitOnly", (h) => h.requests.callbacks.redeliver("r1")],
-	["uploads.presign", "rateLimitOnly", (h) => h.uploads.presign({ filename: "a.jpg", sizeBytes: 1 })],
-	["uploads.createMultipart", "rateLimitOnly", (h) => h.uploads.createMultipart({ filename: "a.bin", sizeBytes: 1 })],
 	[
-		"uploads.completeMultipart without encode",
+		"uploads.create",
 		"rateLimitOnly",
-		(h) => h.uploads.completeMultipart("u1", { uploadKey: "k", parts: [{ partNumber: 1, etag: "e" }] })
+		(h) => h.uploads.create({ filename: "a.bin", sizeBytes: 1, contentType: "image/png" })
 	],
+	["uploads.complete", "idempotent", (h) => h.uploads.complete("f1", { store: true })],
+	["uploads.signParts", "idempotent", (h) => h.uploads.signParts("f1", [1])],
+	["uploads.listParts", "idempotent", (h) => h.uploads.listParts("f1")],
+	["uploads.abort", "idempotent", (h) => h.uploads.abort("f1")],
+	["files.list", "idempotent", (h) => h.files.list()],
+	["files.get", "idempotent", (h) => h.files.get("f1")],
+	["files.delete", "idempotent", (h) => h.files.delete("f1")],
+	["files.fromUrl", "rateLimitOnly", (h) => h.files.fromUrl({ url: "https://example.test/a.png" })],
+	["account.getUploadPolicy", "idempotent", (h) => h.account.getUploadPolicy()],
 	[
-		"uploads.completeMultipart with encode",
+		"account.setUploadPolicy",
 		"idempotent",
-		(h) =>
-			h.uploads.completeMultipart("u1", {
-				uploadKey: "k",
-				parts: [{ partNumber: 1, etag: "e" }],
-				encode: { preset: "p", analyze: "async" }
-			})
+		(h) => h.account.setUploadPolicy({ allowedContentTypes: ["*/*"], maxBytes: 1 })
 	],
-	["uploads.signParts", "idempotent", (h) => h.uploads.signParts("u1", "k", [1])],
-	["uploads.listParts", "idempotent", (h) => h.uploads.listParts("u1", "k")],
-	["uploads.abortMultipart", "idempotent", (h) => h.uploads.abortMultipart("u1", "k")],
-	["files.create", "rateLimitOnly", (h) => h.files.create({ filename: "a.pdf" })],
 	["presets.list", "idempotent", (h) => h.presets.list()],
 	["presets.get", "idempotent", (h) => h.presets.get("p")],
 	["presets.create", "rateLimitOnly", (h) => h.presets.create(PRESET)],
@@ -174,29 +165,12 @@ describe("retries of keyed creates and multipart completes", () => {
 		expect(ids[1]).toBe(ids[0]);
 	});
 
-	it("gives a multipart complete with encode a requestId that survives a retry", async () => {
-		const scripted = scriptedFetch([apiError(500, "boom"), json(200, { uploadKey: "k" })]);
+	it("retries a complete with encode with the same body, so the file's encode is not duplicated", async () => {
+		const scripted = scriptedFetch([apiError(500, "boom"), json(200, { file: { id: "f1" } })]);
 
-		await clientWith(scripted.fetch).uploads.completeMultipart("u1", {
-			uploadKey: "k",
-			parts: [{ partNumber: 1, etag: "e" }],
-			encode: { preset: "p", analyze: "async" }
-		});
+		await clientWith(scripted.fetch).uploads.complete("f1", { store: true });
 
-		const ids = scripted.calls.map((call) => (call.body as { encode: { requestId?: string } }).encode.requestId);
-		expect(ids[0]).toEqual(expect.any(String));
-		expect(ids[1]).toBe(ids[0]);
-	});
-
-	it("does not add a requestId to a multipart complete without encode", async () => {
-		const scripted = scriptedFetch([json(200, { uploadKey: "k" })]);
-
-		await clientWith(scripted.fetch).uploads.completeMultipart("u1", {
-			uploadKey: "k",
-			parts: [{ partNumber: 1, etag: "e" }]
-		});
-
-		expect(bodyText(scripted.calls[0])).not.toContain("requestId");
+		expect(scripted.calls.map((call) => call.body)).toEqual([{ store: true }, { store: true }]);
 	});
 
 	it("keeps a caller-supplied requestId across retries", async () => {
@@ -259,22 +233,5 @@ describe("success bodies", () => {
 		const scripted = scriptedFetch([new Response(null, { status: 200 })]);
 
 		await expect(clientWith(scripted.fetch).presets.list()).rejects.toMatchObject({ code: "invalid_response" });
-	});
-});
-
-describe("upload encode failures", () => {
-	it("keeps the upload key when the encode after a stored upload fails", async () => {
-		const scripted = scriptedFetch([
-			json(201, { uploadKey: "k", url: "https://s3.test/x", expiresAt: "2026-10-19T01:00:00.000Z" }),
-			new Response("", { status: 200, headers: { etag: '"e"' } }),
-			json(404, { error: { code: "preset_not_found", message: "no preset" } })
-		]);
-
-		const error = await clientWith(scripted.fetch)
-			.uploads.uploadAndEncode(Buffer.from("abc"), { filename: "a.bin", preset: "missing" })
-			.catch((err: unknown) => err);
-
-		expect(error).toBeInstanceOf(UploadEncodeError);
-		expect(error).toMatchObject({ uploadKey: "k", code: "preset_not_found", status: 404 });
 	});
 });

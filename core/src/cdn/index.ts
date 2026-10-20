@@ -5,3 +5,4 @@ export * from "./drainInvalidations";
 export * from "./fileInvalidation";
 export * from "./invalidationQueue";
 export * from "./paths";
+export * from "./responseHeaders";

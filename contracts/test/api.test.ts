@@ -8,12 +8,13 @@ import {
 } from "../src/api/presets";
 import { EncodeRequestSchema, EncodeSourceSchema, PlannedItemSchema } from "../src/api/encode";
 import { UpdateAccountRequestSchema } from "../src/api/adminAccounts";
-import { PresignedUploadRequestSchema } from "../src/api/uploads";
+import { CompleteUploadRequestSchema, CreateUploadRequestSchema } from "../src/api/uploads";
+import { UploadPolicySchema } from "../src/api/uploadPolicy";
 
 describe("EncodeSourceSchema", () => {
 	it("accepts each source shape", () => {
 		expect(EncodeSourceSchema.safeParse({ bucket: "b", key: "k.mp4" }).success).toBe(true);
-		expect(EncodeSourceSchema.safeParse({ uploadKey: "uploads/abc" }).success).toBe(true);
+		expect(EncodeSourceSchema.safeParse({ fileId: "0b1c2d3e-0000-4000-8000-000000000001" }).success).toBe(true);
 		expect(EncodeSourceSchema.safeParse({ url: "https://example.com/a.mp4" }).success).toBe(true);
 	});
 
@@ -26,7 +27,10 @@ describe("EncodeSourceSchema", () => {
 
 describe("EncodeRequestSchema", () => {
 	it("defaults analyze to async", () => {
-		const parsed = EncodeRequestSchema.parse({ source: { uploadKey: "uploads/abc" }, preset: "std" });
+		const parsed = EncodeRequestSchema.parse({
+			source: { fileId: "0b1c2d3e-0000-4000-8000-000000000001" },
+			preset: "std"
+		});
 		expect(parsed.analyze).toBe("async");
 	});
 });
@@ -132,15 +136,23 @@ describe("PlannedItemSchema", () => {
 
 describe("callback URLs", () => {
 	it.each(["ftp://example.com/hook", "file:///etc/passwd", "not a url"])("rejects %s", (callbackUrl) => {
-		expect(EncodeRequestSchema.safeParse({ source: { uploadKey: "k" }, preset: "generic", callbackUrl }).success).toBe(
-			false
-		);
+		expect(
+			EncodeRequestSchema.safeParse({
+				source: { fileId: "0b1c2d3e-0000-4000-8000-000000000001" },
+				preset: "generic",
+				callbackUrl
+			}).success
+		).toBe(false);
 	});
 
 	it("accepts http and https", () => {
 		for (const callbackUrl of ["http://example.com/hook", "https://example.com/hook"]) {
 			expect(
-				EncodeRequestSchema.safeParse({ source: { uploadKey: "k" }, preset: "generic", callbackUrl }).success
+				EncodeRequestSchema.safeParse({
+					source: { fileId: "0b1c2d3e-0000-4000-8000-000000000001" },
+					preset: "generic",
+					callbackUrl
+				}).success
 			).toBe(true);
 		}
 	});
@@ -154,9 +166,42 @@ describe("callback URLs", () => {
 	});
 });
 
-describe("PresignedUploadRequestSchema", () => {
-	it("requires sizeBytes", () => {
-		expect(PresignedUploadRequestSchema.safeParse({ filename: "clip.mp4" }).success).toBe(false);
-		expect(PresignedUploadRequestSchema.safeParse({ filename: "clip.mp4", sizeBytes: 10 }).success).toBe(true);
+describe("CreateUploadRequestSchema", () => {
+	it("requires sizeBytes and a type/subtype content type", () => {
+		expect(CreateUploadRequestSchema.safeParse({ filename: "clip.mp4", contentType: "video/mp4" }).success).toBe(false);
+		expect(
+			CreateUploadRequestSchema.safeParse({ filename: "clip.mp4", sizeBytes: 10, contentType: "video" }).success
+		).toBe(false);
+		expect(
+			CreateUploadRequestSchema.safeParse({ filename: "clip.mp4", sizeBytes: 10, contentType: "Video/MP4" }).data
+		).toMatchObject({ contentType: "video/mp4" });
+	});
+});
+
+describe("CompleteUploadRequestSchema", () => {
+	const fileId = "0b1c2d3e-0000-4000-8000-000000000001";
+
+	it("accepts store or encode, and rejects both", () => {
+		expect(CompleteUploadRequestSchema.safeParse({ store: true }).success).toBe(true);
+		expect(CompleteUploadRequestSchema.safeParse({ encode: { preset: "generic" } }).success).toBe(true);
+		expect(CompleteUploadRequestSchema.safeParse({ store: true, encode: { preset: "generic" } }).success).toBe(false);
+		expect(CompleteUploadRequestSchema.safeParse({}).success).toBe(false);
+		expect(fileId).toHaveLength(36);
+	});
+
+	it("accepts parts alongside the target", () => {
+		expect(CompleteUploadRequestSchema.safeParse({ store: true, parts: [{ partNumber: 1, etag: "e" }] }).success).toBe(
+			true
+		);
+	});
+});
+
+describe("UploadPolicySchema", () => {
+	it("accepts exact types, type wildcards and */*, and rejects malformed patterns", () => {
+		expect(
+			UploadPolicySchema.safeParse({ allowedContentTypes: ["image/*", "video/mp4", "*/*"], maxBytes: 10 }).success
+		).toBe(true);
+		expect(UploadPolicySchema.safeParse({ allowedContentTypes: ["*/png"], maxBytes: 10 }).success).toBe(false);
+		expect(UploadPolicySchema.safeParse({ allowedContentTypes: [], maxBytes: 10 }).success).toBe(false);
 	});
 });

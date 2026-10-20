@@ -9,6 +9,7 @@ import {
 	NotFoundError,
 	PermissionError,
 	TimeoutError,
+	UnprocessableError,
 	UploadError,
 	ValidationError,
 	type ProfileInput
@@ -283,67 +284,69 @@ describe("assets", () => {
 	});
 });
 
-describe("uploads", () => {
-	it("presigns a single upload", async () => {
-		const presigned = await helios.uploads.presign({ filename: "a.jpg", sizeBytes: 3, contentType: "image/jpeg" });
+describe("uploads and files", () => {
+	const TEXT = "plain text, not an image\n";
 
-		expect(presigned).toMatchObject({ uploadKey: expect.any(String), url: `${SIGNED_HOST}/put` });
+	beforeEach(() => {
+		const store = objectStore();
+		jest
+			.spyOn(store, "objectInfo")
+			.mockImplementation(async () =>
+				s3Puts.length === 0
+					? undefined
+					: { size: s3Puts.reduce((total, put) => total + put.bytes.byteLength, 0), etag: '"e"' }
+			);
+		jest.spyOn(store, "readHead").mockImplementation(async () => Buffer.from(TEXT));
+		jest.spyOn(store, "listKeys").mockResolvedValue([]);
+		jest.spyOn(store, "deleteKeys").mockResolvedValue();
 	});
 
-	it("uploads a small buffer with one presigned PUT", async () => {
-		const uploadKey = await helios.uploads.upload(Buffer.from("abc"), { filename: "a.txt", contentType: "text/plain" });
-
-		expect(uploadKey).toEqual(expect.any(String));
-		expect(s3Puts).toEqual([{ url: `${SIGNED_HOST}/put`, bytes: Buffer.from("abc") }]);
-	});
-
-	it("creates and completes a multipart upload by hand", async () => {
-		const created = await helios.uploads.createMultipart({ filename: "big.mp4", sizeBytes: 12 * MB });
-		const completed = await helios.uploads.completeMultipart(created.uploadId, {
-			uploadKey: created.uploadKey,
-			parts: created.parts.map((part) => ({ partNumber: part.partNumber, etag: `"e${part.partNumber}"` }))
+	it("stores a small file with one presigned PUT and returns the stored file", async () => {
+		const { file } = await helios.uploads.upload(Buffer.from(TEXT), {
+			filename: "a.txt",
+			contentType: "text/plain",
+			store: true
 		});
 
-		expect(created.parts).toHaveLength(3);
-		expect(created.partSizeBytes).toBe(5 * MB);
-		expect(completed.uploadKey).toBe(created.uploadKey);
+		expect(file).toMatchObject({ status: "STORED", contentType: "text/plain", sizeBytes: TEXT.length });
+		expect(s3Puts).toEqual([{ url: `${SIGNED_HOST}/put`, bytes: Buffer.from(TEXT) }]);
 	});
 
-	it("signs fresh part URLs and lists the stored parts of a multipart upload", async () => {
-		const created = await helios.uploads.createMultipart({ filename: "big.mp4", sizeBytes: 12 * MB });
-		jest.mocked(objectStore().listParts).mockResolvedValueOnce([{ partNumber: 1, etag: '"e1"', sizeBytes: 5 * MB }]);
+	it("stores a large file through multipart, sending each part and completing with the store target", async () => {
+		const bytes = Buffer.alloc(12 * MB, 97);
 
-		const signed = await helios.uploads.signParts(created.uploadId, created.uploadKey, [2, 3]);
-		const listed = await helios.uploads.listParts(created.uploadId, created.uploadKey);
-
-		expect(signed.parts.map((part) => part.partNumber)).toEqual([2, 3]);
-		expect(listed.parts).toEqual([{ partNumber: 1, etag: '"e1"', sizeBytes: 5 * MB }]);
-	});
-
-	it("uploads a large input through multipart and encodes it", async () => {
-		const bytes = Buffer.alloc(12 * MB, 7);
-
-		const result = await helios.uploads.uploadAndEncode(bytes, {
-			filename: "big.mp4",
-			preset: "generic",
-			multipartThresholdBytes: MB
+		const { file } = await helios.uploads.upload(bytes, {
+			filename: "big.txt",
+			contentType: "text/plain",
+			store: true
 		});
 
-		expect(result.request).toMatchObject({ status: "ANALYZING" });
+		expect(file.status).toBe("STORED");
 		expect(s3Puts.map((put) => put.bytes.byteLength)).toEqual([5 * MB, 5 * MB, 2 * MB]);
 	});
 
-	it("uploads and encodes a small input in one call", async () => {
-		const result = await helios.uploads.uploadAndEncode(Buffer.from("abc"), { filename: "a.mp4", preset: "generic" });
+	it("uploads and starts an encode in one call", async () => {
+		const { file, request } = await helios.uploads.upload(Buffer.from(TEXT), {
+			filename: "a.mp4",
+			contentType: "text/plain",
+			encode: { preset: "generic" }
+		});
 
-		expect(result.uploadKey).toEqual(expect.any(String));
-		expect(result.request).toMatchObject({ mode: "encode", status: "ANALYZING" });
+		expect(file.status).toBe("STORED");
+		expect(request).toMatchObject({ mode: "encode", status: "ANALYZING" });
 	});
 
-	it("aborts a multipart upload", async () => {
-		const created = await helios.uploads.createMultipart({ filename: "big.mp4", sizeBytes: 12 * MB });
+	it("creates an upload, then completes it with the parts it sent", async () => {
+		const created = await helios.uploads.create({ filename: "big.txt", sizeBytes: 12 * MB, contentType: "text/plain" });
 
-		await expect(helios.uploads.abortMultipart(created.uploadId, created.uploadKey)).resolves.toBeUndefined();
+		expect(created.mode).toBe("multipart");
+		if (created.mode !== "multipart") return;
+		expect(created.parts).toHaveLength(3);
+		expect(created.partSizeBytes).toBe(5 * MB);
+		const signed = await helios.uploads.signParts(created.fileId, [2, 3]);
+		expect(signed.parts.map((part) => part.partNumber)).toEqual([2, 3]);
+		expect((await helios.uploads.listParts(created.fileId)).parts).toEqual([]);
+		await expect(helios.uploads.abort(created.fileId)).resolves.toBeUndefined();
 	});
 
 	it("rejects an upload whose storage PUT fails", async () => {
@@ -354,13 +357,44 @@ describe("uploads", () => {
 				String(input).startsWith(SIGNED_HOST) ? new Response("denied", { status: 403 }) : realFetch(input, init)
 		});
 
-		await expect(failing.uploads.upload(Buffer.from("abc"), { filename: "a.txt" })).rejects.toBeInstanceOf(UploadError);
+		await expect(
+			failing.uploads.upload(Buffer.from(TEXT), { filename: "a.txt", contentType: "text/plain", store: true })
+		).rejects.toBeInstanceOf(UploadError);
 	});
 
-	it("presigns a raw file", async () => {
-		const file = await helios.files.create({ filename: "brief.pdf", contentType: "application/pdf" });
+	it("gets, lists and deletes a stored file", async () => {
+		const { file } = await helios.uploads.upload(Buffer.from(TEXT), {
+			filename: "a.txt",
+			contentType: "text/plain",
+			store: true
+		});
 
-		expect(file).toMatchObject({ fileKey: expect.any(String), uploadUrl: expect.any(String), url: expect.any(String) });
+		const got = await helios.files.get(file.id);
+		const listed = await helios.files.list();
+		const deleted = await helios.files.delete(file.id);
+
+		expect(got.id).toBe(file.id);
+		expect(listed.files.map((item) => item.id)).toContain(file.id);
+		expect(deleted).toEqual({ fileId: file.id });
+		await expect(helios.files.get(file.id)).rejects.toBeInstanceOf(NotFoundError);
+	});
+
+	it("accepts a file from a URL as PENDING", async () => {
+		const pending = await helios.files.fromUrl({ url: "https://example.test/logo.png", externalId: "logo-1" });
+
+		expect(pending).toMatchObject({ status: "PENDING", externalId: "logo-1" });
+	});
+
+	it("sets and reads the account upload policy", async () => {
+		await helios.account.setUploadPolicy({ allowedContentTypes: ["image/*"], maxBytes: 10 * MB });
+
+		await expect(helios.account.getUploadPolicy()).resolves.toEqual({
+			allowedContentTypes: ["image/*"],
+			maxBytes: 10 * MB
+		});
+		await expect(
+			helios.uploads.create({ filename: "a.mp4", sizeBytes: 1, contentType: "video/mp4" })
+		).rejects.toBeInstanceOf(UnprocessableError);
 	});
 });
 

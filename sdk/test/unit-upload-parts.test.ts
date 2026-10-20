@@ -1,46 +1,49 @@
 import { PermissionError, ValidationError } from "../src/index.js";
 import { clientWith } from "./helpers/client.js";
-import { json, routedFetch, scriptedFetch } from "./helpers/fakeFetch.js";
+import { apiError, json, routedFetch } from "./helpers/fakeFetch.js";
 
-const UPLOAD_KEY = "acme/uploads/0b1c2d3e-0000-4000-8000-000000000001/clip.mp4";
+const FILE_ID = "0b1c2d3e-0000-4000-8000-000000000001";
+
+function uploads(fetch: Parameters<typeof clientWith>[0]) {
+	return clientWith(fetch).uploads;
+}
 
 describe("uploads.signParts", () => {
-	it("POSTs the key and part numbers to the upload's parts path and returns the fresh URLs", async () => {
-		const response = { parts: [{ partNumber: 2, url: "https://s3.test/p2" }], expiresAt: "2026-10-20T06:00:00.000Z" };
-		const { fetch, calls } = scriptedFetch([json(200, response)]);
+	it("POSTs the part numbers to the file's parts path and returns the fresh URLs", async () => {
+		const { fetch, calls } = routedFetch(() =>
+			json(200, { parts: [{ partNumber: 2, url: "https://s3.test/part/2" }], expiresAt: "2026-10-20T06:00:00.000Z" })
+		);
 
-		const result = await clientWith(fetch).uploads.signParts("u 1", UPLOAD_KEY, [2]);
+		const { parts } = await uploads(fetch).signParts(FILE_ID, [2]);
 
-		expect(result).toEqual(response);
-		expect(calls[0]).toMatchObject({ method: "POST", url: "https://api.test/uploads/multipart/u%201/parts" });
-		expect(calls[0]?.body).toEqual({ uploadKey: UPLOAD_KEY, partNumbers: [2] });
-	});
-
-	it("maps a foreign upload key to PermissionError", async () => {
-		const { fetch } = scriptedFetch([json(403, { error: { code: "forbidden", message: "no" } })]);
-
-		await expect(clientWith(fetch).uploads.signParts("u1", UPLOAD_KEY, [1])).rejects.toThrow(PermissionError);
+		expect(parts).toEqual([{ partNumber: 2, url: "https://s3.test/part/2" }]);
+		expect(calls[0]).toMatchObject({
+			method: "POST",
+			url: expect.stringContaining(`/uploads/${FILE_ID}/parts`),
+			body: { partNumbers: [2] }
+		});
 	});
 
 	it("maps an out-of-range part number to ValidationError", async () => {
-		const { fetch } = scriptedFetch([json(400, { error: { code: "validation_error", message: "bad" } })]);
+		const { fetch } = routedFetch(() => apiError(400, "validation_failed"));
 
-		await expect(clientWith(fetch).uploads.signParts("u1", UPLOAD_KEY, [10001])).rejects.toThrow(ValidationError);
+		await expect(uploads(fetch).signParts(FILE_ID, [10001])).rejects.toBeInstanceOf(ValidationError);
+	});
+
+	it("maps a file that belongs to another account to PermissionError", async () => {
+		const { fetch } = routedFetch(() => apiError(403, "forbidden"));
+
+		await expect(uploads(fetch).signParts(FILE_ID, [1])).rejects.toBeInstanceOf(PermissionError);
 	});
 });
 
 describe("uploads.listParts", () => {
-	it("GETs the parts with the upload key as a query parameter", async () => {
-		const response = { parts: [{ partNumber: 1, etag: '"e1"', sizeBytes: 5 }] };
-		const { fetch, calls } = routedFetch(() => json(200, response));
+	it("GETs the parts of the file", async () => {
+		const { fetch, calls } = routedFetch(() => json(200, { parts: [{ partNumber: 1, etag: '"a"', sizeBytes: 5 }] }));
 
-		const result = await clientWith(fetch).uploads.listParts("u1", UPLOAD_KEY);
+		const { parts } = await uploads(fetch).listParts(FILE_ID);
 
-		expect(result).toEqual(response);
-		expect(calls[0]).toMatchObject({
-			method: "GET",
-			url: `https://api.test/uploads/multipart/u1/parts?uploadKey=${encodeURIComponent(UPLOAD_KEY)}`
-		});
-		expect(calls[0]?.body).toBeUndefined();
+		expect(parts).toEqual([{ partNumber: 1, etag: '"a"', sizeBytes: 5 }]);
+		expect(calls[0]).toMatchObject({ method: "GET", url: expect.stringContaining(`/uploads/${FILE_ID}/parts`) });
 	});
 });

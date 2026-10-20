@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import yaml from "js-yaml";
+import { EDGE_RESPONSE_HEADERS } from "../../core/src/cdn/responseHeaders";
 import { renderCdnTemplate } from "../infra/inlineEdgeFunction";
 
 const ROOT = path.resolve(__dirname, "../..");
@@ -72,6 +73,23 @@ describe("infra/cdn.yml", () => {
 			])
 		);
 		expect(Object.keys(template.Outputs as Node)).toEqual(["DistributionId", "DomainName"]);
+	});
+
+	it("sends the same security headers as the local edge, on the default and the image behaviors", () => {
+		const policy = singleResource(template, "AWS::CloudFront::ResponseHeadersPolicy")
+			.ResponseHeadersPolicyConfig as Node;
+		const headers = policy.SecurityHeadersConfig as Node;
+		const custom = (policy.CustomHeadersConfig as { Items: { Header: string; Value: string }[] }).Items;
+		const sent = {
+			"X-Content-Type-Options": "nosniff",
+			"Content-Security-Policy": (headers.ContentSecurityPolicy as Node).ContentSecurityPolicy,
+			...Object.fromEntries(custom.map(({ Header, Value }) => [Header, Value]))
+		};
+		expect(sent).toEqual(EDGE_RESPONSE_HEADERS);
+
+		const policyId = { Ref: "ResponseHeadersPolicy" };
+		expect(config.DefaultCacheBehavior).toMatchObject({ ResponseHeadersPolicyId: policyId });
+		expect((config.CacheBehaviors as Node[])[0]).toMatchObject({ ResponseHeadersPolicyId: policyId });
 	});
 
 	it("inlines the edge function source into the rewrite function", () => {

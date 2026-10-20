@@ -12,6 +12,7 @@ import { transcriptIndexes } from "./transcripts";
 import { sceneAnalysisIndexes } from "./sceneAnalyses";
 import { callbackDeliveryIndexes } from "./callbackDeliveries";
 import { cdnInvalidationIndexes } from "./cdnInvalidations";
+import { fileIndexes } from "./files";
 
 export * from "./accounts";
 export * from "./apiKeys";
@@ -25,6 +26,7 @@ export * from "./transcripts";
 export * from "./sceneAnalyses";
 export * from "./callbackDeliveries";
 export * from "./cdnInvalidations";
+export * from "./files";
 
 const indexesByCollection: Record<string, IndexDescription[]> = {
 	accounts: accountIndexes,
@@ -38,7 +40,8 @@ const indexesByCollection: Record<string, IndexDescription[]> = {
 	transcripts: transcriptIndexes,
 	scene_analyses: sceneAnalysisIndexes,
 	callback_deliveries: callbackDeliveryIndexes,
-	cdn_invalidations: cdnInvalidationIndexes
+	cdn_invalidations: cdnInvalidationIndexes,
+	files: fileIndexes
 };
 
 export async function ensureIndexes(): Promise<void> {

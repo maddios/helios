@@ -6,7 +6,7 @@ Use this package only on a server: it holds an account API key. Verify webhooks 
 
 ## Docs
 
-- [README](./README.md): install, quickstart with webhook verification in Express, one recipe per task (source encode, analysis mode, translations, transcripts, scenes and stills, image URLs, presets, re-encode, cancel, purge, destinations, browser uploads, usage, errors, admin).
+- [README](./README.md): install, quickstart with webhook verification in Express, one recipe per task (source encode, analysis mode, translations, transcripts, scenes and stills, image URLs, presets, re-encode, cancel, purge, destinations, store a file, encode a stored file, files from a URL, delete, upload policy, browser uploads, usage, errors, admin).
 - [AGENTS](./AGENTS.md): agent reference. Method selection table, method index with parameters and returns, event catalogue, idempotency and retry rules, status codes, limits, and integration checklists for bella and novel.
 - [Webhooks guide](./guides/webhooks.md): headers, signature verification, idempotency, ordering, retries, redelivery and the `helios.test` event.
 - [EventBridge guide](./guides/eventbridge.md): bus setup, resource policy, destination configuration, rules and troubleshooting.
@@ -14,9 +14,11 @@ Use this package only on a server: it holds an account API key. Verify webhooks 
 ## Key entry points
 
 - `new Helios({ apiKey, baseUrl, imageBaseUrl?, webhookSecret?, maxRetries?, timeoutMs? })`: account client with resources `encodes`, `assets`, `requests`, `uploads`, `files`, `presets`, `destinations`, `account`, `usage`, plus `webhooks` and `images`.
-- `helios.uploads.uploadAndEncode(input, { preset, ... })`: store a file, then encode it. Returns `{ uploadKey, request }`.
-- `helios.uploads.createMultipart`, `signParts`, `listParts`, `completeMultipart`: multipart upload for a browser or your own driver. Use `uploadParts` from `@partnrup/helios-sdk/browser` in the page, with no key.
-- `uploadParts(upload, file, { concurrency, onProgress, signal, signParts, uploadedParts, maxPartRetries })` from "@partnrup/helios-sdk/browser": XHR upload of the parts with progress, retries, 403 renewal and resume. Returns the ETags. `uploadSingle(presigned, file)` covers one PUT.
+- `helios.uploads.upload(input, { contentType, store: true } | { contentType, encode: { preset, ... } })`: store a file, optionally encode it. Returns `{ file, request? }`. The file has a CDN `url`, and image files report `image` dimensions. Small files take one PUT and large files take parts; the server decides.
+- `helios.uploads.create`, `complete(fileId, { parts?, store | encode })`, `signParts`, `listParts`, `abort`: the steps behind `upload`, for a browser or your own driver. `create` returns `mode: "single"` or `mode: "multipart"`.
+- `helios.files.list`, `get`, `delete` (answers `{ fileId }`), `fromUrl({ url, externalId?, destination? | callbackUrl? })`: stored files. `fromUrl` is asynchronous and reports `file.stored` or `file.failed` to the destination (or the account's).
+- `helios.account.getUploadPolicy`, `setUploadPolicy({ allowedContentTypes, maxBytes })`: uploads may narrow the policy per request, never widen it.
+- `upload(created, file, { concurrency, onProgress, signal, signParts, uploadedParts, maxPartRetries })` from "@partnrup/helios-sdk/browser": takes the `uploads.create` result and PUTs the file, as one PUT or in parts by its `mode`, with XHR progress, retries, 403 renewal and resume. Returns `{ parts? }` for the backend's `uploads.complete`. `uploadParts` and `uploadSingle(presigned, file)` are the two uploaders it uses.
 - `helios.requests.wait(id, { timeoutMs? })`: poll until COMPLETE, ERROR or CANCELLED.
 - `helios.webhooks.verify(rawBody, signatureHeader)`: check the signature and parse a typed `WebhookEvent`.
 - `helios.webhooks.eventBridgeDetail(event)`: parse an EventBridge event's `detail` into a `WebhookEvent`.

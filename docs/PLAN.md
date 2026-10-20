@@ -1103,6 +1103,99 @@ Execution: I orchestrate, haiku subagents build modules (context under 100k), an
 - The media bucket resource is new in `infra/media.yml`, with `DeletionPolicy: Retain`. Step 9 must either import the existing bucket or adopt this stack. It is not wired to a stage yet.
 - `test:dist` now runs `prebuild` (which removes `dist`) before `tsup`, because two tsup configs cannot clean one folder in parallel.
 
+## Step 8c: Helios as a file store (Kodak-capable, added and built 2026-10-19)
+Goal: Helios can store files without encoding, so a future Kodak replacement needs no second system. Replacing Kodak is **not** part of this plan.
+
+**One upload flow, mode chosen by size:**
+- `POST /uploads` `{ filename, sizeBytes, contentType, externalId? }` returns either `{ mode: "single", fileId, key, url, headers, expiresAt }` (presigned PUT, the Kodak-style one-shot) or `{ mode: "multipart", fileId, key, uploadId, partSizeBytes, parts, expiresAt }`.
+  - The threshold is `UPLOAD_MULTIPART_THRESHOLD_BYTES` (config).
+  - The SDK never makes the caller choose. Server side, `uploads.upload(input, { store | encode })` creates, uploads and completes. Browser side, `upload(created, file)` dispatches on `mode` (`uploadSingle` or `uploadParts`).
+- `POST /uploads/:fileId/complete` `{ parts? (multipart only), store: true } | { parts?, encode: EncodeOptions }`:
+  - Completes S3 multipart when needed, then HEADs the object to check the size.
+  - Sniffs the real content type from the first bytes (magic numbers). For images it reads width and height from the header only.
+  - Writes the File record (`status: STORED`).
+  - With `encode`, it also creates the encode request with `source: { fileId }`.
+  - Returns `{ file }`, or `{ file, request }`.
+  - Idempotent per `fileId`.
+- Re-sign, list parts and abort move under `/uploads/:fileId/...`; `uploadKey` is replaced by `fileId`.
+
+**Files registry (`files` collection):**
+- `{ _id: fileId, accountId, key: {slug}/files/{fileId}/{sanitized name}, filename, contentType (sniffed), declaredContentType, sizeBytes, image?: { width, height, format }, externalId?, status: PENDING|STORED|FAILED, source: upload|url, createdAt, storedAt?, deletedAt? }`.
+- Indexes: `{accountId, createdAt}` and `{accountId, externalId}`.
+- `PENDING` docs are written at create, so they're visible for cleanup.
+- An S3 lifecycle rule aborts incomplete multipart uploads after 7 days. Unfinished PENDING files expire after 7 days (TTL plus a cleanup of their objects).
+
+**Files API:**
+- `GET /files` (cursor; filter `externalId` | `contentTypePrefix`), `GET /files/:id`.
+- `DELETE /files/:id` deletes the object and its `resize_cache` variants, enqueues a CDN invalidation, and tombstones the record.
+- `POST /files/from-url` `{ url, filename?, externalId? }` creates a PENDING file. An async `ingest` item on the AI tier (SSRF-guarded `safeFetch`, policy-checked, streamed to S3) then flips it to STORED or FAILED and sends a `file.stored` / `file.failed` callback.
+- **File view:** `{ id, key, url (CDN, ?v=storedAt epoch), filename, contentType, sizeBytes, image?, externalId, status, createdAt }`. Image files are transformable through `/img/<params>/<key>` (`images.url`).
+
+**Encode from a stored file:** `source: { fileId }` reads the file key in place, with no copy.
+- The asset records `source: { type: "file", fileId }`.
+- Purging an asset never deletes its source file; files have their own delete.
+- This replaces the old `{ uploadKey }` source and the one-asset upload binding. Nothing is deployed, so there is no compatibility layer.
+
+**Upload policy:**
+- `accounts.uploadPolicy = { allowedContentTypes: string[] (exact or `type/*`), maxBytes }`. A request may pass a narrower `policy`, and widening is rejected.
+- Checked at create on the declared type and size: the presigned PUT signs `Content-Type`, and the size can't exceed `maxBytes`.
+- Verified again at complete on the sniffed type and the actual size. A violation deletes the object and marks the file FAILED (`422 policy_violation`).
+- Admin and account views expose the policy; `PATCH /account/upload-policy` sets it.
+
+**Raw `POST /files`** (the earlier icarus-style raw upload) is removed in favour of `/uploads`.
+
+**Built (2026-10-19):**
+- Contracts: `POST /uploads` (201, discriminated on `mode`), `POST /uploads/{fileId}/complete` (`store` or `encode`), `POST|GET /uploads/{fileId}/parts`, `DELETE /uploads/{fileId}`, `GET /files`, `GET|DELETE /files/{id}`, `POST /files/from-url` (202), `GET|PATCH /account/upload-policy`. The `file.stored` and `file.failed` webhook events are defined. The raw `POST /files`, the presigned and multipart routes, and `uploadKey` are removed.
+- Core: `files` model (`core/src/files/`), upload policy in `core/src/policy/` (narrowing, violation checks), `core/src/uploads/` (create, complete, parts). Sniffing uses `magic-bytes.js` 1.13.1 and `image-size` 2.0.4, both pinned. `expirePendingFiles` runs in the scaler and the local lambda runner. `deleteFile` removes the object and its `resize_cache` variants, then enqueues an invalidation for `/<dir>/*`. The `ingest` path fetches through `safeFetch`, sniffs the first 256 KiB, checks the content type before anything is stored, then streams the file to S3.
+- Worker: the poll loop and the `lambda-ai` handler dispatch `{ fileId }` messages to `ingestFileFromUrl`. Purge no longer deletes a file source.
+- Infra: `infra/media.yml` and `local/bootstrap.ts` abort incomplete multipart uploads after 7 days. LocalStack accepts the rule.
+- SDK: `uploads.upload(input, { contentType, store: true } | { encode })`, `uploads.create|complete|signParts|listParts|abort`, `files.list|get|delete|fromUrl`, `account.getUploadPolicy|setUploadPolicy`. The browser entry gained `upload(created, file, options)`, which dispatches on `mode`. `uploadAndEncode`, `presign`, `createMultipart`, `completeMultipart`, `abortMultipart`, `files.create` and `UploadEncodeError` are removed. The README, AGENTS, llms.txt and examples are updated. The README snippets are checked against the examples.
+- Tests: core unit tests (`core/test/files`, `core/test/uploads`), API (`api/test/uploads.test.ts`), SDK unit and integration, and `local/test/files.e2e.ts` (new). `browserUpload.e2e.ts` covers a single store, a multipart store with resume and re-sign, and a multipart upload with encode.
+
+**Deviations from the spec above:**
+- PENDING records have `expiresAt` and a scheduled cleanup, not a Mongo TTL. A TTL would delete the record before its objects are, which would orphan them. FAILED records stay.
+- An asset from a file records `{ type: "file", fileId, key }`. The key is copied from the file so `sourceObjectLocation` stays synchronous, as it is for every other source.
+- `ingest` is not a pipeline item, because an item needs an asset and a request. It is a `{ fileId }` message on the `lambda-ai` queue, handled by the same worker.
+- `file.stored` and `file.failed` are sent for from-url files only. An upload is answered synchronously, so its success or failure is in the response.
+- Complete with `encode` defaults the encode `requestId` to the file id, so a repeated complete returns the same request.
+- `uploads.complete` replaces `UploadEncodeError`: a failed encode after a stored file is retried by calling complete again with the same `fileId`.
+- The single PUT now signs `Content-Type`, through `signableHeaders`. Before, only `host` was signed.
+- `signParts` checks part numbers against the stored `partCount`. This closes the deviation noted in Step 8b.
+- `file-type` 22 is ESM-only and cannot be loaded by the CJS jest setup, so `magic-bytes.js` is used. An empty object sniffs as `text/plain`.
+- `DELETE /files/{id}` deletes synchronously and answers 202, with the file gone from the API at once.
+
+## Review fixes to Steps 8b and 8c (2026-10-19)
+
+**Status of Step 8:** superseded. `uploadAndEncode`, `UploadEncodeError`, `presign`, the multipart helpers and `files.create` described in the Step 8 section are replaced by the 8b and 8c surface (`uploads.upload|create|complete|signParts|listParts|abort`, `files.*`).
+
+**Decisions:**
+- **XSS.** `infra/cdn.yml` has a `ResponseHeadersPolicy` on the default and `/img/*` behaviors: `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox`, `Cross-Origin-Resource-Policy: cross-origin`. The values live in `core/src/cdn/responseHeaders.ts`, the local image edge sends them, and `scripts/test/cdnTemplate.test.ts` checks the template against them. `cfn-lint` 1.57.2 passes on the rendered template (one pre-existing warning, W2001 "Stage not used", in `infra/media.yml`).
+- **Content-Disposition** is derived from the type: `inline` for image (not SVG), video, audio and PDF, `attachment` for everything else. The type comes from the declared type at create (signed into the PUT or CreateMultipartUpload) and from the sniffed type at ingest. Complete rejects a declared inline type whose bytes disagree (422 `policy_violation`), so an SVG or HTML document can never be served inline under an image type. There is no CopyObject at complete. `MAX_UPLOAD_BYTES` defaults to 10 GiB, above the 5 GiB CopyObject limit.
+- **Signed headers.** The single PUT signs `content-type`, `content-disposition` and `content-length` (the declared size). The response `headers` are `Content-Type` and `Content-Disposition`, and the SDK and browser send exactly those.
+- **Type equivalence.** `core/src/policy/contentTypes.ts`. Declared types are compared with every magic-bytes candidate, plus aliases (WebM/Matroska, HEIC/HEIF, WAV variants). OOXML matches a zip signature with the extension. m4a matches an mp4 container with the extension. SVG and HTML are read from the markup, because magic-bytes names neither as text.
+- **Delete** answers 200 with `{ fileId }`. It claims the record first (`deletedAt`), then checks for non-terminal requests that read the file (409 `file_in_use`, claim reverted), then releases objects.
+- **Second complete with different encode options** answers 409 `complete_conflict` and says to use `encodes.create({ source: { fileId } })`. The options compared are preset, analyze, destination and resolved post-process.
+
+**Fixes made (2026-10-19):**
+- Claims are atomic. `markStored` and `markFailed` require `PENDING` and no `deletedAt`, and return no match instead of falling back to a load. A complete, ingest or expiry that loses the race releases what it wrote. Abort claims before it releases, and answers 409 when it loses.
+- Expiry runs each file in its own try/catch, and `NoSuchUpload` on abort is success. From-url expiries send `file.failed`.
+- Dead letters: a `{ fileId }` message in a `fargate-p*-dlq` runs `failDeadFile` (idempotent; `file.failed`).
+- S3 `InvalidPart`, `InvalidPartOrder`, `EntityTooSmall` and `NoSuchUpload` on complete map to 422 `invalid_parts`.
+- `uploads.upload` throws `UploadCompleteError` (`fileId`, plus the API `code`, `status` and `requestId`) when complete fails after the bytes are sent.
+- Re-sign examples return `.parts`, and the README snippet matches.
+- Browser docs: `uploadSingle` and `PresignedUpload` document the exact-header rule, and stale names are removed.
+- `UPLOAD_ALLOWED_ORIGINS` is no longer in core config. `local/loadConfig.ts` validates it, and the media bucket CORS uses it. `UPLOAD_MULTIPART_THRESHOLD_BYTES` is capped at 5 GiB.
+- Filenames starting with a dot are rejected (400). A from-url name that starts with a dot is sanitised.
+- The from-url request accepts `destination` or `callbackUrl`, and the `file.stored` and `file.failed` events go there, or to the account's destination.
+- An ingest passes its abort signal to the SSRF fetch and the upload. The worker sets the budget to `LAMBDA_MAX_DURATION_SEC`. An abort propagates, so the message is redelivered and is not failed.
+
+**Cache gap on delete (checked):** `deleteFile` queues `/<slug>/files/<id>/*`. Rewritten `/img` URIs are `/<key>/_img/<params>`, which sit under that prefix, so a deleted file's variants are invalidated at the CDN. The only gap is the TTL of a copy the CDN has not yet invalidated, because CloudFront invalidation is asynchronous.
+
+**Deviations:**
+- Usage (`computeSec`) is not recorded for a file ingest. The record needs the executing worker's tier and memory, which are deployment settings, and that is Step 9.
+- A presigned PUT that lands after its file was deleted leaves an orphan object until the URL expires. The media bucket has no lifecycle rule for `files/` prefixes, so Step 9 should add one for PENDING keys.
+- `uploads.upload` wraps every complete failure in `UploadCompleteError`, not only encode failures, because a single PUT has no other way to recover the file id.
+
 ## Local development & testing
 
 Goal: test as much as possible on the local server with Docker + LocalStack before any AWS deploy.
@@ -1200,6 +1293,16 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
 - **Commit (step 1):** on a `feat/scaffold-core` branch, then check in before step 2.
 
 ## Implementation decisions log
+
+- **2026-10-19 (step 8c file store):**
+  - User-approved spec, built as written. Deviations are listed under "Step 8c" above.
+  - Uploads are one flow: `POST /uploads` chooses single or multipart by `UPLOAD_MULTIPART_THRESHOLD_BYTES`, and `complete` decides store or encode. `uploadKey` and the raw `/files` route are removed without compatibility.
+  - Storage keys are `{slug}/files/{fileId}/{name}`. A file key is served from the CDN and is transformable through `/img`, as media keys are.
+  - Upload policy: an account policy defaults to `*/*` up to `MAX_UPLOAD_BYTES`. A request may narrow it, never widen it, and the policy is stored with the file. A violation at create is a 422 `policy_violation`. A violation at complete (declared or sniffed type, or size) deletes the object and marks the file FAILED.
+  - Sniffing uses the magic numbers of the first 256 KiB. Bytes that no signature matches are `text/plain` when they are valid UTF-8 without NUL, and `application/octet-stream` otherwise. A declared image, video or audio type that differs from the sniffed type is a violation, so a `.png` that holds text is rejected.
+  - Ingest fetches with the existing SSRF guard and sends `file.stored` or `file.failed`. A Helios error (SSRF, a bad status, too large, a policy violation) is final. Any other error leaves the message for redelivery.
+  - The CDN invalidation for a deleted file uses the same `cdn_invalidations` queue as purge.
+  - Dependencies added to `core`: `magic-bytes.js@1.13.1`, `image-size@2.0.4` (exact).
 
 - **2026-10-19 (step 7 review fixes):**
   - A (user): `c_fit` is the default, so the canonical form omits it in core and the edge. `w_100,c_fit` 301s to `w_100`.
@@ -1426,3 +1529,4 @@ Goal: test as much as possible on the local server with Docker + LocalStack befo
   - `ListParts` follows `IsTruncated`, because the SDK paginator looped on LocalStack.
   - LocalStack does not check signatures, so the e2e simulates the first 403 with a test-only interceptor.
   - `infra/media.yml` owns the media bucket with `DeletionPolicy: Retain`. Step 9 decides how it attaches to the existing bucket.
+- **2026-10-19:** Helios stores files without encoding through one upload flow. The server picks single or multipart by size, and at complete the caller chooses `store` or `encode`. Adds a files registry (content type sniffed, image dimensions), a per-account upload policy that requests may narrow, async from-URL file ingest, and a file delete with CDN invalidation. `uploadKey` is replaced by `fileId`.

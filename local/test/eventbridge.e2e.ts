@@ -127,7 +127,7 @@ async function deliverCallbacks(requestId: string): Promise<number> {
 	let delivered = 0;
 	while (delivered < expected && Date.now() < deadline) {
 		for (const message of await queue.poll(10, 1)) {
-			if (message.body.requestId === requestId) {
+			if ("requestId" in message.body && message.body.requestId === requestId) {
 				await deliverCallback(message.body, message.receiveCount);
 				delivered += 1;
 			}

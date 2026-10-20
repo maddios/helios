@@ -7,7 +7,7 @@ import { callbackEventId } from "./eventId";
 export async function markDeliveryFailed(message: CallbackMessage): Promise<void> {
 	const id = callbackEventId(message);
 	if ((await callbackDeliveries().findOne({ _id: id })) === null) {
-		contextLogger({ requestId: message.requestId }).error(
+		contextLogger({ accountId: message.type === "file" ? message.accountId : undefined }).error(
 			"Dead-letter delivery not found; acknowledged without action"
 		);
 		return;

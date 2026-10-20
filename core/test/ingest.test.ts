@@ -129,7 +129,7 @@ describe("ingestUrl", () => {
 	it("throws for a source that is not a URL", async () => {
 		const asset = {
 			...urlAsset(`${base}/file`),
-			source: { type: "upload" as const, key: `${SLUG}/uploads/x/clip.mp4` }
+			source: { type: "file" as const, fileId: "f1", key: `${SLUG}/files/f1/clip.mp4` }
 		};
 
 		await expect(ingestUrl(asset, SLUG, { maxBytes: FILE_BYTES })).rejects.toThrow("source is not a URL");

@@ -3,8 +3,8 @@ import type {
 	AssetPostProcessRequestSchema,
 	CreateAccountRequestSchema,
 	EncodeOptionsSchema,
+	CompleteUploadRequestSchema,
 	EncodeRequestSchema,
-	MultipartCompleteRequestSchema,
 	ReencodeRequestSchema,
 	UpdateAccountRequestSchema
 } from "@helios/contracts";
@@ -45,12 +45,13 @@ export type ReencodeRequest = z.input<typeof ReencodeRequestSchema>;
 export type AssetPostProcessRequest = z.input<typeof AssetPostProcessRequestSchema>;
 
 /**
- * Body of `uploads.completeMultipart`, optionally with encode options.
+ * Body of `uploads.complete`: `store: true` keeps the file, `encode` stores it and encodes it. Multipart uploads also
+ * pass the uploaded parts.
  *
  * @example
- * const body: MultipartCompleteRequest = { uploadKey, parts: [{ partNumber: 1, etag: '"abc"' }] };
+ * const body: CompleteUploadRequest = { parts: [{ partNumber: 1, etag: '"abc"' }], store: true };
  */
-export type MultipartCompleteRequest = z.input<typeof MultipartCompleteRequestSchema>;
+export type CompleteUploadRequest = z.input<typeof CompleteUploadRequestSchema>;
 
 /**
  * Body of `admin.accounts.create`: slug, name, source buckets, features and an optional destination.
@@ -90,8 +91,11 @@ export type {
 	CallbackDeliveryListResponse,
 	CallbackDeliveryView,
 	ClonePresetRequest,
+	CompleteUploadResponse,
 	CreateApiKeyRequest,
 	CreatePresetRequest,
+	CreateUploadRequest,
+	CreateUploadResponse,
 	Destination,
 	DestinationTestError,
 	DestinationTestRequest,
@@ -102,23 +106,21 @@ export type {
 	EventBridgePolicyResponse,
 	EncodeSource,
 	ExpectedVersionQuery,
-	FileUploadRequest,
-	FileUploadResponse,
+	FileDeletedResponse,
+	FileFromUrlRequest,
+	FileImage,
+	FileListQuery,
+	FileListResponse,
+	FileStatus,
+	FileView,
 	HealthResponse,
 	ItemKind,
 	ItemStatus,
 	MediaAssetOutput,
-	MultipartCreateRequest,
-	MultipartCreateResponse,
-	MultipartCompleteResponse,
-	MultipartListPartsResponse,
-	MultipartSignPartsResponse,
 	PlannedItem,
 	PostProcessDefaults,
 	PostProcessRequest,
 	PostProcessStatus,
-	PresignedUploadRequest,
-	PresignedUploadResponse,
 	PresetListResponse,
 	PresetScope,
 	PresetView,
@@ -136,11 +138,14 @@ export type {
 	RotateWebhookSecretResponse,
 	SceneAnalysisView,
 	SceneView,
+	SignUploadPartsResponse,
 	SourceMetadata,
 	TranscriptFiles,
 	TranscriptView,
 	UpdatePresetRequest,
 	UpdateProfileRequest,
+	UploadPartsListResponse,
+	UploadPolicy,
 	UsageDay,
 	UsageQuery,
 	UsageResponse,

@@ -25,18 +25,11 @@ describe("config", () => {
 		});
 	});
 
-	it("parses UPLOAD_ALLOWED_ORIGINS as a list of origins", () => {
-		expect(config().UPLOAD_ALLOWED_ORIGINS).toEqual(["http://localhost:5173", "http://localhost:3000"]);
+	it("caps UPLOAD_MULTIPART_THRESHOLD_BYTES at 5 GiB, the largest single PUT S3 accepts", () => {
+		process.env.UPLOAD_MULTIPART_THRESHOLD_BYTES = String(5 * 1024 * 1024 * 1024 + 1);
+		resetConfigForTests();
+		expect(() => config()).toThrow(/UPLOAD_MULTIPART_THRESHOLD_BYTES/);
 	});
-
-	it.each(["", " , ", "https://app.example.com/", "https://*.example.com", "*", "app.example.com"])(
-		"rejects UPLOAD_ALLOWED_ORIGINS of %j",
-		(value) => {
-			process.env.UPLOAD_ALLOWED_ORIGINS = value;
-			resetConfigForTests();
-			expect(() => config()).toThrow(/UPLOAD_ALLOWED_ORIGINS/);
-		}
-	);
 
 	it("requires a CDN_MODE that is cloudfront or recording", () => {
 		process.env.CDN_MODE = "cdn";

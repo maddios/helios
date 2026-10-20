@@ -185,32 +185,34 @@ export class AbortedError extends HeliosError {}
 export class UploadError extends HeliosError {}
 
 /**
- * The upload was stored, but starting its encode request failed. The stored object is still usable, so the
- * `uploadKey` lets you retry the encode with `encodes.create({ source: { uploadKey }, ... })`.
+ * The bytes were uploaded, but `uploads.complete` failed, so the file is still pending on the server. `fileId` is the
+ * file to call `uploads.complete` again with, or `uploads.abort` to discard. The `code`, `status` and `requestId` are
+ * those of the API error (`cause`).
  *
  * @example
  * try {
- *   await helios.uploads.uploadAndEncode(file, { preset: "generic" });
+ *   await helios.uploads.upload(file, { contentType: "video/mp4", encode: { preset: "generic" } });
  * } catch (err) {
- *   if (err instanceof UploadEncodeError) await helios.encodes.create({ source: { uploadKey: err.uploadKey }, preset: "generic" });
+ *   if (err instanceof UploadCompleteError) await helios.uploads.complete(err.fileId, { store: true });
  * }
  */
-export class UploadEncodeError extends HeliosError {
-	/** Storage key of the upload, which is already stored and can be encoded again. */
-	readonly uploadKey: string;
+export class UploadCompleteError extends HeliosError {
+	/** Id of the pending file. */
+	readonly fileId: string;
 
 	/**
-	 * @param uploadKey Storage key of the stored upload.
-	 * @param cause The error from the encode request; its code, status and request id are copied.
+	 * @param fileId Id of the pending file.
+	 * @param cause The error the API returned for `uploads.complete`.
 	 */
-	constructor(uploadKey: string, cause: HeliosError) {
-		super(cause.code, `Encoding upload ${uploadKey} failed: ${cause.message}`, {
-			status: cause.status,
-			details: cause.details,
-			requestId: cause.requestId,
+	constructor(fileId: string, cause: unknown) {
+		const api = cause instanceof HeliosError ? cause : undefined;
+		super(api?.code ?? "upload_complete_failed", api?.message ?? "Completing the upload failed", {
+			status: api?.status,
+			details: api?.details,
+			requestId: api?.requestId,
 			cause
 		});
-		this.uploadKey = uploadKey;
+		this.fileId = fileId;
 	}
 }
 

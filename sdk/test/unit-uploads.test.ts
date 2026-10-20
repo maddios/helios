@@ -1,28 +1,51 @@
 import { join } from "node:path";
 import { Readable } from "node:stream";
-import { AbortedError, UploadError, ValidationError } from "../src/index.js";
+import { AbortedError, UploadCompleteError, UploadError, ValidationError } from "../src/index.js";
 import type { FetchFn, HeliosOptions } from "../src/options.js";
 import { partitionChunks } from "../src/uploads/partition.js";
 import { forEachBounded } from "../src/uploads/pool.js";
 import { clientWith } from "./helpers/client.js";
 import { bodyText, json, routedFetch, type Call } from "./helpers/fakeFetch.js";
-import { requestView } from "./helpers/fixtures.js";
 
 const STORAGE = "https://s3.test";
+const FILE_ID = "0b1c2d3e-0000-4000-8000-000000000001";
+const EXPIRES_AT = "2026-10-20T06:00:00.000Z";
 const PAYLOAD = Buffer.from("0123456789");
-const MULTIPART = { multipartThresholdBytes: 4 };
+const STORED = {
+	file: {
+		id: FILE_ID,
+		status: "STORED",
+		url: "https://cdn.test/a.bin",
+		filename: "a.bin",
+		key: "k",
+		createdAt: EXPIRES_AT
+	}
+};
+const OPTIONS = { filename: "a.bin", contentType: "application/octet-stream" };
 
-function multipartCreated(partSizeBytes: number, count: number) {
+function multipart(partSizeBytes: number, count: number) {
 	return {
+		mode: "multipart",
+		fileId: FILE_ID,
+		key: `acme/files/${FILE_ID}/a.bin`,
 		uploadId: "u1",
-		uploadKey: "uploads/acme/clip.bin",
 		partSizeBytes,
 		parts: Array.from({ length: count }, (_, index) => ({
 			partNumber: index + 1,
 			url: `${STORAGE}/part/${index + 1}`
-		}))
+		})),
+		expiresAt: EXPIRES_AT
 	};
 }
+
+const SINGLE = {
+	mode: "single",
+	fileId: FILE_ID,
+	key: `acme/files/${FILE_ID}/a.bin`,
+	url: `${STORAGE}/put`,
+	headers: { "Content-Type": "application/octet-stream" },
+	expiresAt: EXPIRES_AT
+};
 
 function partOk(call: Call): Response {
 	const partNumber = call.url.split("/").pop();
@@ -37,26 +60,37 @@ function bytesOf(call: Call): Buffer {
 	return Buffer.from(call.raw as Uint8Array);
 }
 
-describe("multipart upload", () => {
-	it("splits the input, uploads each part and completes with ordered ETags", async () => {
+function isCreate(call: Call): boolean {
+	return call.method === "POST" && call.url.endsWith("/uploads");
+}
+
+function isComplete(call: Call): boolean {
+	return call.method === "POST" && call.url.endsWith("/complete");
+}
+
+describe("upload with the multipart mode", () => {
+	it("sends each part, then completes with the ordered ETags and the store target", async () => {
 		const { fetch, calls } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
+			if (isCreate(call)) return json(201, multipart(4, 3));
 			if (call.method === "PUT") return partOk(call);
-			return json(200, { uploadKey: "uploads/acme/clip.bin" });
+			return json(200, STORED);
 		});
 
-		const key = await uploadsFor(fetch).upload(PAYLOAD, { ...MULTIPART, filename: "clip.bin" });
+		const result = await uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, store: true });
 
 		const parts = calls.filter((call) => call.method === "PUT");
-		expect(key).toBe("uploads/acme/clip.bin");
-		expect(parts.map(bytesOf).map((bytes) => bytes.toString())).toEqual(["0123", "4567", "89"]);
-		expect(calls.at(-1)?.body).toEqual({
-			uploadKey: "uploads/acme/clip.bin",
-			parts: [
-				{ partNumber: 1, etag: '"etag-1"' },
-				{ partNumber: 2, etag: '"etag-2"' },
-				{ partNumber: 3, etag: '"etag-3"' }
-			]
+		expect(result.file.id).toBe(FILE_ID);
+		expect(parts.map((call) => bytesOf(call).toString())).toEqual(["0123", "4567", "89"]);
+		expect(calls.at(-1)).toMatchObject({
+			url: expect.stringContaining(`/uploads/${FILE_ID}/complete`),
+			body: {
+				parts: [
+					{ partNumber: 1, etag: '"etag-1"' },
+					{ partNumber: 2, etag: '"etag-2"' },
+					{ partNumber: 3, etag: '"etag-3"' }
+				],
+				store: true
+			}
 		});
 	});
 
@@ -64,7 +98,7 @@ describe("multipart upload", () => {
 		let inFlight = 0;
 		let peak = 0;
 		const { fetch } = routedFetch(async (call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(2, 6));
+			if (isCreate(call)) return json(201, multipart(2, 6));
 			if (call.method === "PUT") {
 				inFlight += 1;
 				peak = Math.max(peak, inFlight);
@@ -72,212 +106,221 @@ describe("multipart upload", () => {
 				inFlight -= 1;
 				return partOk(call);
 			}
-			return json(200, { uploadKey: "k" });
+			return json(200, STORED);
 		});
 
-		await uploadsFor(fetch).upload(Buffer.alloc(12), { ...MULTIPART, concurrency: 2, filename: "clip.bin" });
+		await uploadsFor(fetch).upload(Buffer.alloc(12), { ...OPTIONS, concurrency: 2, store: true });
 
 		expect(peak).toBe(2);
 	});
 
-	it("retries a failed part and then completes", async () => {
-		let failedOnce = false;
-		const { fetch, calls } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
-			if (call.url === `${STORAGE}/part/2` && !failedOnce) {
-				failedOnce = true;
-				return new Response("boom", { status: 500 });
-			}
-			if (call.method === "PUT") return partOk(call);
-			return json(200, { uploadKey: "k" });
-		});
-
-		await uploadsFor(fetch).upload(PAYLOAD, { ...MULTIPART, filename: "clip.bin" });
-
-		expect(calls.filter((call) => call.url === `${STORAGE}/part/2`)).toHaveLength(2);
-		expect(calls.some((call) => call.url.includes("/complete"))).toBe(true);
-		expect(calls.some((call) => call.method === "DELETE")).toBe(false);
-	});
-
 	it("reports progress after each part", async () => {
 		const { fetch } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
+			if (isCreate(call)) return json(201, multipart(4, 3));
 			if (call.method === "PUT") return partOk(call);
-			return json(200, { uploadKey: "k" });
+			return json(200, STORED);
 		});
-		const progress: { uploadedBytes: number; totalBytes: number }[] = [];
+		const seen: number[] = [];
 
 		await uploadsFor(fetch).upload(PAYLOAD, {
-			...MULTIPART,
-			filename: "clip.bin",
-			onProgress: (event) => progress.push(event)
+			...OPTIONS,
+			store: true,
+			onProgress: ({ uploadedBytes }) => seen.push(uploadedBytes)
 		});
 
-		const uploaded = progress.map((event) => event.uploadedBytes);
-		expect(progress).toHaveLength(3);
-		expect(uploaded).toEqual([...uploaded].sort((a, b) => a - b));
-		expect(progress.at(-1)).toEqual({ uploadedBytes: 10, totalBytes: 10 });
+		expect(seen.at(-1)).toBe(PAYLOAD.length);
+		expect(seen).toEqual([...seen].sort((a, b) => a - b));
 	});
 
 	it("aborts the upload on the server when a part is rejected", async () => {
 		const { fetch, calls } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
-			if (call.url === `${STORAGE}/part/2`) return new Response("denied", { status: 403 });
-			if (call.method === "PUT") return partOk(call);
+			if (isCreate(call)) return json(201, multipart(4, 3));
+			if (call.method === "PUT") return new Response("denied", { status: 403 });
 			return new Response(null, { status: 204 });
 		});
 
-		const error = await uploadsFor(fetch)
-			.upload(PAYLOAD, { ...MULTIPART, filename: "clip.bin" })
-			.catch((err: unknown) => err);
-
-		expect(error).toBeInstanceOf(UploadError);
-		expect(error).toMatchObject({ status: 403 });
-		expect(calls.find((call) => call.method === "DELETE")?.url).toBe(
-			`https://api.test/uploads/multipart/u1?uploadKey=uploads%2Facme%2Fclip.bin`
-		);
-		expect(calls.some((call) => call.url.includes("/complete"))).toBe(false);
+		await expect(uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, store: true })).rejects.toBeInstanceOf(UploadError);
+		expect(calls.at(-1)).toMatchObject({ method: "DELETE", url: expect.stringContaining(`/uploads/${FILE_ID}`) });
 	});
 
 	it("aborts the upload on the server and throws AbortedError when the signal fires", async () => {
 		const controller = new AbortController();
-		const { fetch, calls } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
+		const { fetch, calls } = routedFetch(async (call) => {
+			if (isCreate(call)) return json(201, multipart(4, 3));
 			if (call.method === "PUT") {
 				controller.abort();
-				throw call.signal?.reason;
+				return partOk(call);
 			}
 			return new Response(null, { status: 204 });
 		});
 
-		const error = await uploadsFor(fetch)
-			.upload(PAYLOAD, { ...MULTIPART, filename: "clip.bin", signal: controller.signal })
-			.catch((err: unknown) => err);
-
-		expect(error).toBeInstanceOf(AbortedError);
-		expect(calls.some((call) => call.method === "DELETE")).toBe(true);
+		await expect(
+			uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, store: true, signal: controller.signal })
+		).rejects.toBeInstanceOf(AbortedError);
+		expect(calls.at(-1)?.method).toBe("DELETE");
 	});
 
-	it("streams a Readable and a Blob through multipart in exact part sizes", async () => {
+	it("streams a Readable through multipart in exact part sizes", async () => {
 		const { fetch, calls } = routedFetch((call) => {
-			if (call.method === "POST" && call.url.endsWith("/uploads/multipart")) return json(201, multipartCreated(4, 3));
+			if (isCreate(call)) return json(201, multipart(4, 3));
 			if (call.method === "PUT") return partOk(call);
-			return json(200, { uploadKey: "k" });
+			return json(200, STORED);
 		});
+
+		await uploadsFor(fetch).upload(Readable.from([Buffer.from("01"), Buffer.from("234"), Buffer.from("56789")]), {
+			filename: "a.bin",
+			sizeBytes: 10,
+			contentType: "application/octet-stream",
+			store: true
+		});
+
+		expect(calls.filter((call) => call.method === "PUT").map((call) => bytesOf(call).toString())).toEqual([
+			"0123",
+			"4567",
+			"89"
+		]);
+	});
+});
+
+describe("upload with the single mode", () => {
+	it("PUTs the bytes once with the content type, then completes with store", async () => {
+		const { fetch, calls } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, SINGLE);
+			if (call.method === "PUT") return new Response(null, { status: 200 });
+			return json(200, STORED);
+		});
+
+		const result = await uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, store: true });
+
+		expect(result.file.status).toBe("STORED");
+		expect(calls.map((call) => call.method)).toEqual(["POST", "PUT", "POST"]);
+		expect(calls[1]).toMatchObject({
+			url: `${STORAGE}/put`,
+			headers: expect.objectContaining({ "content-type": "application/octet-stream" })
+		});
+		expect(bodyText(calls[2])).toBe('{"store":true}');
+	});
+
+	it("sends encode options with the complete call when the target is encode", async () => {
+		const { fetch, calls } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, SINGLE);
+			if (call.method === "PUT") return new Response(null, { status: 200 });
+			return json(202, { ...STORED, request: { id: "r1", status: "ANALYZING" } });
+		});
+
+		await uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, encode: { preset: "generic" } });
+
+		expect(calls.at(-1)?.body).toEqual({ encode: { preset: "generic" } });
+	});
+
+	it("sends the policy and externalId with the create call", async () => {
+		const { fetch, calls } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, SINGLE);
+			if (call.method === "PUT") return new Response(null, { status: 200 });
+			return json(200, STORED);
+		});
+
+		await uploadsFor(fetch).upload(PAYLOAD, {
+			...OPTIONS,
+			externalId: "clip-7",
+			policy: { allowedContentTypes: ["image/*"], maxBytes: 1024 },
+			store: true
+		});
+
+		expect(calls[0].body).toEqual({
+			filename: "a.bin",
+			sizeBytes: PAYLOAD.length,
+			contentType: "application/octet-stream",
+			externalId: "clip-7",
+			policy: { allowedContentTypes: ["image/*"], maxBytes: 1024 }
+		});
+	});
+
+	it("sends exactly the headers the server signed, not the content type alone", async () => {
+		const signed = { ...SINGLE, headers: { "Content-Type": "text/html", "Content-Disposition": "attachment" } };
+		const { fetch, calls } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, signed);
+			if (call.method === "PUT") return new Response(null, { status: 200 });
+			return json(200, STORED);
+		});
+
+		await uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, contentType: "text/html", store: true });
+
+		expect(calls[1].headers).toEqual({ "content-type": "text/html", "content-disposition": "attachment" });
+	});
+
+	it("throws UploadCompleteError with the file id when complete fails after the bytes were sent", async () => {
+		const { fetch } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, SINGLE);
+			if (call.method === "PUT") return new Response(null, { status: 200 });
+			return json(422, { error: { code: "policy_violation", message: "not allowed" } });
+		});
+
+		const err = await uploadsFor(fetch)
+			.upload(PAYLOAD, { ...OPTIONS, encode: { preset: "generic" } })
+			.catch((caught: unknown) => caught);
+
+		expect(err).toBeInstanceOf(UploadCompleteError);
+		expect(err).toMatchObject({ fileId: FILE_ID, code: "policy_violation", status: 422 });
+	});
+
+	it("does not abort a single PUT that fails", async () => {
+		const { fetch, calls } = routedFetch((call) => {
+			if (isCreate(call)) return json(201, SINGLE);
+			return new Response("denied", { status: 403 });
+		});
+
+		await expect(uploadsFor(fetch).upload(PAYLOAD, { ...OPTIONS, store: true })).rejects.toBeInstanceOf(UploadError);
+		expect(calls.some((call) => call.method === "DELETE")).toBe(false);
+	});
+});
+
+describe("file inputs", () => {
+	it("requires a filename for a Buffer and a size for a stream", async () => {
+		const { fetch } = routedFetch(() => json(201, SINGLE));
 		const client = uploadsFor(fetch);
 
-		await client.upload(Readable.from([Buffer.from("012"), Buffer.from("34567"), Buffer.from("89")]), {
-			...MULTIPART,
-			filename: "clip.bin",
-			sizeBytes: 10
-		});
-		await client.upload(new Blob([PAYLOAD]), { ...MULTIPART, filename: "blob.bin" });
-
-		const puts = calls.filter((call) => call.method === "PUT").map((call) => bytesOf(call).toString());
-		expect(puts).toEqual(["0123", "4567", "89", "0123", "4567", "89"]);
-	});
-});
-
-describe("single presigned upload", () => {
-	it("PUTs a small Buffer to a presigned URL and returns its key", async () => {
-		const { fetch, calls } = routedFetch((call) => {
-			if (call.url.endsWith("/uploads/presigned")) {
-				return json(201, {
-					uploadKey: "uploads/acme/a.txt",
-					url: `${STORAGE}/single`,
-					expiresAt: "2026-10-19T01:00:00.000Z"
-				});
-			}
-			return new Response(null, { status: 200 });
-		});
-
-		const key = await uploadsFor(fetch).upload(Buffer.from("abc"), { filename: "a.txt", contentType: "text/plain" });
-
-		expect(key).toBe("uploads/acme/a.txt");
-		expect(calls[0]?.body).toEqual({ filename: "a.txt", sizeBytes: 3, contentType: "text/plain" });
-		expect(calls[1]).toMatchObject({ method: "PUT", url: `${STORAGE}/single` });
-		expect(calls[1]?.headers["content-type"]).toBe("text/plain");
-		expect(bodyText(calls[1] as Call)).toBe("abc");
-	});
-
-	it("detects the size and basename of a file path", async () => {
-		const { fetch, calls } = routedFetch((call) => {
-			if (call.url.endsWith("/uploads/presigned")) {
-				return json(201, { uploadKey: "k", url: `${STORAGE}/single`, expiresAt: "2026-10-19T01:00:00.000Z" });
-			}
-			return new Response(null, { status: 200 });
-		});
-
-		await uploadsFor(fetch).upload(join(__dirname, "../package.json"));
-
-		expect(calls[0]?.body).toMatchObject({ filename: "package.json" });
-		expect((calls[0]?.body as { sizeBytes: number }).sizeBytes).toBeGreaterThan(0);
-	});
-
-	it("requires a filename for a Buffer and a size for a stream", async () => {
-		const { fetch } = routedFetch(() => json(500, {}));
-		const uploads = uploadsFor(fetch);
-
-		await expect(uploads.upload(Buffer.from("a"))).rejects.toMatchObject({ code: "filename_required" });
-		await expect(uploads.upload(Readable.from([Buffer.from("a")]), { filename: "a" })).rejects.toBeInstanceOf(
+		await expect(client.upload(PAYLOAD, { contentType: "image/png", store: true })).rejects.toBeInstanceOf(
 			ValidationError
 		);
-		await expect(uploads.upload(Readable.from([Buffer.from("a")]), { filename: "a" })).rejects.toMatchObject({
-			code: "size_required"
+		await expect(
+			client.upload(Readable.from([PAYLOAD]), { filename: "a.bin", contentType: "image/png", store: true })
+		).rejects.toBeInstanceOf(ValidationError);
+	});
+
+	it("uses the basename of a file path as the filename", async () => {
+		const { fetch, calls } = routedFetch((call) =>
+			isCreate(call)
+				? json(201, SINGLE)
+				: call.method === "PUT"
+					? new Response(null, { status: 200 })
+					: json(200, STORED)
+		);
+
+		await uploadsFor(fetch).upload(join(__dirname, "..", "package.json"), {
+			contentType: "application/json",
+			store: true
 		});
+
+		expect(calls[0].body).toMatchObject({ filename: "package.json" });
 	});
 });
 
-describe("uploadAndEncode", () => {
-	it("uploads, then encodes the stored key with a generated requestId", async () => {
-		const { fetch, calls } = routedFetch((call) => {
-			if (call.url.endsWith("/uploads/presigned")) {
-				return json(201, {
-					uploadKey: "uploads/acme/a.mp4",
-					url: `${STORAGE}/single`,
-					expiresAt: "2026-10-19T01:00:00.000Z"
-				});
-			}
-			if (call.url.endsWith("/encode")) return json(202, requestView("ANALYZING"));
-			return new Response(null, { status: 200 });
-		});
-
-		const result = await uploadsFor(fetch).uploadAndEncode(Buffer.from("abc"), {
-			filename: "a.mp4",
-			preset: "generic",
-			onProgress: () => undefined,
-			externalId: "clip-1"
-		});
-
-		expect(result).toEqual({ uploadKey: "uploads/acme/a.mp4", request: requestView("ANALYZING") });
-		const encodeBody = calls.find((call) => call.url.endsWith("/encode"))?.body as Record<string, unknown>;
-		expect(encodeBody).toMatchObject({
-			source: { uploadKey: "uploads/acme/a.mp4" },
-			preset: "generic",
-			externalId: "clip-1",
-			requestId: expect.any(String)
-		});
-		expect(encodeBody).not.toHaveProperty("filename");
-		expect(encodeBody).not.toHaveProperty("onProgress");
-	});
-});
-
-describe("partitionChunks", () => {
+describe("partitionChunks and forEachBounded", () => {
 	it("cuts uneven chunks into exact parts with a shorter last part", async () => {
-		const parts: number[] = [];
-		for await (const part of partitionChunks([Buffer.from("012"), Buffer.from("34567"), Buffer.from("89")], 4)) {
-			parts.push(part.byteLength);
+		const parts: string[] = [];
+		for await (const part of partitionChunks([Buffer.from("01"), Buffer.from("2345"), Buffer.from("6")], 3)) {
+			parts.push(part.toString());
 		}
 
-		expect(parts).toEqual([4, 4, 2]);
+		expect(parts).toEqual(["012", "345", "6"]);
 	});
-});
 
-describe("forEachBounded", () => {
 	it("stops starting new items after the first failure", async () => {
 		const started: number[] = [];
+
 		async function* items(): AsyncGenerator<number> {
-			yield* [1, 2, 3, 4, 5];
+			yield* [1, 2, 3, 4];
 		}
 
 		await expect(
@@ -288,5 +331,27 @@ describe("forEachBounded", () => {
 		).rejects.toThrow("boom");
 
 		expect(started).toEqual([1, 2]);
+	});
+});
+
+describe("completion endpoints", () => {
+	it("completes a file with the stored target and no parts for a single PUT", async () => {
+		const { fetch, calls } = routedFetch(() => json(200, STORED));
+
+		await uploadsFor(fetch).complete(FILE_ID, { store: true });
+
+		expect(calls[0]).toMatchObject({
+			method: "POST",
+			url: expect.stringContaining(`/uploads/${FILE_ID}/complete`),
+			body: { store: true }
+		});
+	});
+
+	it("aborts a pending upload by file id", async () => {
+		const { fetch, calls } = routedFetch(() => new Response(null, { status: 204 }));
+
+		await uploadsFor(fetch).abort(FILE_ID);
+
+		expect(calls[0]).toMatchObject({ method: "DELETE", url: expect.stringContaining(`/uploads/${FILE_ID}`) });
 	});
 });

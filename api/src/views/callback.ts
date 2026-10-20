@@ -1,7 +1,7 @@
 import type { CallbackDeliveryView } from "@helios/contracts";
-import type { CallbackDelivery } from "@helios/core";
+import type { RequestDelivery } from "@helios/core";
 
-export function toCallbackView(delivery: CallbackDelivery): CallbackDeliveryView {
+export function toCallbackView(delivery: RequestDelivery): CallbackDeliveryView {
 	return {
 		id: delivery._id,
 		requestId: delivery.requestId,

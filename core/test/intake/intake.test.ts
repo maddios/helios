@@ -1,5 +1,13 @@
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@helios/contracts";
-import { encodingPresets, ensureIndexes, mediaAssets, requests, type Account } from "../../src/models";
+import { ForbiddenError, NotFoundError, ValidationError } from "@helios/contracts";
+import {
+	encodingPresets,
+	ensureIndexes,
+	files,
+	mediaAssets,
+	requests,
+	type Account,
+	type FileRecord
+} from "../../src/models";
 import { createEncode, reencode } from "../../src/intake";
 import { probeSource } from "../../src/analyze/probe";
 import { objectStore } from "../../src/storage";
@@ -29,8 +37,25 @@ const ACCOUNT: Account = {
 	features: { peopleAttributes: false },
 	createdAt: new Date()
 };
-const UPLOAD_KEY = "acme/uploads/3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b/clip.mp4";
+const FILE_ID = "3f1c2b4a-5d6e-4f70-8a9b-0c1d2e3f4a5b";
+const FILE_KEY = `acme/files/${FILE_ID}/clip.mp4`;
 const S3_SOURCE = { bucket: "partner-bucket", key: "videos/clip.mp4" };
+
+async function insertFile(overrides: Partial<FileRecord> = {}): Promise<void> {
+	await files().insertOne({
+		_id: FILE_ID,
+		accountId: ACCOUNT._id,
+		key: FILE_KEY,
+		filename: "clip.mp4",
+		status: "STORED",
+		source: "upload",
+		policy: { allowedContentTypes: ["*/*"], maxBytes: 1024 },
+		contentType: "video/mp4",
+		sizeBytes: 10,
+		createdAt: new Date(),
+		...overrides
+	});
+}
 
 function encodeInput(overrides: Record<string, unknown> = {}) {
 	return { source: S3_SOURCE, preset: genericPreset.name, analyze: "async" as const, ...overrides };
@@ -71,12 +96,21 @@ describe("intake", () => {
 			).rejects.toThrow(ForbiddenError);
 		});
 
-		it("rejects an upload key that the account does not own", async () => {
-			const foreign = UPLOAD_KEY.replace("acme/", "other/");
+		it("rejects a file id the account does not own with 404", async () => {
+			await insertFile();
 
-			await expect(createEncode(ACCOUNT, encodeInput({ source: { uploadKey: foreign } }))).rejects.toThrow(
-				ForbiddenError
-			);
+			await expect(
+				createEncode({ ...ACCOUNT, _id: "account-2" }, encodeInput({ source: { fileId: FILE_ID } }))
+			).rejects.toThrow(NotFoundError);
+		});
+
+		it("rejects a file that is not stored yet with file_not_stored", async () => {
+			await insertFile({ status: "PENDING" });
+
+			await expect(createEncode(ACCOUNT, encodeInput({ source: { fileId: FILE_ID } }))).rejects.toMatchObject({
+				code: "file_not_stored",
+				httpStatus: 422
+			});
 		});
 
 		it("rejects a source object that does not exist with source_not_found", async () => {
@@ -95,12 +129,18 @@ describe("intake", () => {
 			).rejects.toThrow(ValidationError);
 		});
 
-		it("binds an upload key to one asset", async () => {
-			await createEncode(ACCOUNT, encodeInput({ source: { uploadKey: UPLOAD_KEY } }));
+		it("encodes one stored file into several assets, each recording the file as its source", async () => {
+			await insertFile();
 
-			await expect(createEncode(ACCOUNT, encodeInput({ source: { uploadKey: UPLOAD_KEY } }))).rejects.toThrow(
-				ConflictError
-			);
+			await createEncode(ACCOUNT, encodeInput({ source: { fileId: FILE_ID } }));
+			await createEncode(ACCOUNT, encodeInput({ source: { fileId: FILE_ID } }));
+
+			expect(await mediaAssets().countDocuments({ "source.type": "file", "source.fileId": FILE_ID })).toBe(2);
+			expect((await mediaAssets().findOne({ "source.type": "file" }))?.source).toEqual({
+				type: "file",
+				fileId: FILE_ID,
+				key: FILE_KEY
+			});
 		});
 
 		it("returns the same request for a repeated requestId without a second asset", async () => {

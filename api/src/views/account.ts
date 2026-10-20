@@ -1,5 +1,5 @@
 import type { AccountView } from "@helios/contracts";
-import type { Account } from "@helios/core";
+import { effectiveUploadPolicy, type Account } from "@helios/core";
 
 export function toAccountView(account: Account): AccountView {
 	const { destination } = account;
@@ -11,6 +11,7 @@ export function toAccountView(account: Account): AccountView {
 		...(destination !== undefined && { destination }),
 		...(destination?.type === "webhook" && { callbackUrl: destination.url }),
 		features: account.features,
+		uploadPolicy: effectiveUploadPolicy(account),
 		createdAt: account.createdAt.toISOString()
 	};
 }

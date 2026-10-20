@@ -13,9 +13,9 @@ const BucketSourceSchema = z
 	})
 	.strict();
 
-const UploadSourceSchema = z
+const FileSourceSchema = z
 	.object({
-		uploadKey: z.string().describe("Key returned by a completed upload")
+		fileId: z.uuid().describe("Id of a stored file")
 	})
 	.strict();
 
@@ -25,7 +25,7 @@ const UrlSourceSchema = z
 	})
 	.strict();
 
-export const EncodeSourceSchema = z.union([BucketSourceSchema, UploadSourceSchema, UrlSourceSchema]);
+export const EncodeSourceSchema = z.union([BucketSourceSchema, FileSourceSchema, UrlSourceSchema]);
 export type EncodeSource = z.infer<typeof EncodeSourceSchema>;
 
 export const PlannedItemSchema = z.object({

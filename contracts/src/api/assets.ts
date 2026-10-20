@@ -33,8 +33,9 @@ export const AssetViewSchema = z
 					key: z.string().describe("Key of the source object")
 				}),
 				z.object({
-					type: z.literal("upload"),
-					key: z.string().describe("Key of the uploaded source object")
+					type: z.literal("file"),
+					fileId: z.string().describe("Id of the stored file the asset was encoded from"),
+					key: z.string().describe("Storage key of the stored file")
 				}),
 				z.object({
 					type: z.literal("url"),

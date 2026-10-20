@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { AssetOutputViewSchema, AssetViewSchema } from "./api/assets";
 import { RequestViewSchema } from "./api/requests";
+import { FileViewSchema } from "./api/files";
 import { TranscriptFilesSchema } from "./transcript";
 import { SceneItemOutputSchema } from "./scenes";
 import { ItemKindSchema, ItemStatusSchema } from "./statuses";
@@ -12,11 +13,13 @@ export const WEBHOOK_TOLERANCE_SEC = 300;
 
 const ITEM_EVENTS = ["item.completed", "item.failed", "item.skipped", "item.cancelled"] as const;
 const REQUEST_EVENTS = ["request.completed", "request.failed", "request.cancelled", "asset.deleted"] as const;
+const FILE_EVENTS = ["file.stored", "file.failed"] as const;
 export const TEST_EVENT_NAME = "helios.test";
 
 export type ItemEventName = (typeof ITEM_EVENTS)[number];
 export type RequestEventName = (typeof REQUEST_EVENTS)[number];
-export type WebhookEventName = ItemEventName | RequestEventName | typeof TEST_EVENT_NAME;
+export type FileEventName = (typeof FILE_EVENTS)[number];
+export type WebhookEventName = ItemEventName | RequestEventName | FileEventName | typeof TEST_EVENT_NAME;
 
 const WebhookItemSchema = z
 	.object({
@@ -67,6 +70,12 @@ const sequence = z
 	.positive()
 	.describe("Per-request event number, starting at 1, increasing in creation order; gaps are possible");
 
+const FileEventDataSchema = z
+	.object({
+		file: FileViewSchema.describe("The file in its state after the event")
+	})
+	.meta({ id: "WebhookFileEventData" });
+
 const TestEventDataSchema = z
 	.object({ accountId: z.string().describe("Id of the account the test event was sent for") })
 	.meta({ id: "WebhookTestEventData" });
@@ -78,6 +87,17 @@ function itemEvent<const E extends ItemEventName>(event: E) {
 			sequence,
 			event: z.literal(event).describe("Event name"),
 			data: ItemEventDataSchema.describe("Item event data")
+		})
+		.meta({ id: event });
+}
+
+function fileEvent<const E extends FileEventName>(event: E) {
+	return z
+		.object({
+			...envelope,
+			sequence: z.literal(1).describe("File events are sent once, so the sequence is always 1"),
+			event: z.literal(event).describe("Event name"),
+			data: FileEventDataSchema.describe("File event data")
 		})
 		.meta({ id: event });
 }
@@ -114,6 +134,8 @@ export const WebhookEventSchema = z
 		requestEvent("request.failed"),
 		requestEvent("request.cancelled"),
 		requestEvent("asset.deleted"),
+		fileEvent("file.stored"),
+		fileEvent("file.failed"),
 		testEvent()
 	])
 	.describe("Event posted to the account's callback URL, signed with the webhook secret")

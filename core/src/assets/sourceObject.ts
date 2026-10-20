@@ -1,13 +1,16 @@
 import { config } from "../config";
-import type { MediaAsset } from "../models";
+import type { MediaAsset, MediaAssetSource } from "../models";
 import { ingestKey } from "./keys";
 
 export function sourceObjectLocation(asset: MediaAsset): { bucket: string; key: string } {
-	const { source } = asset;
+	return sourceLocation(asset.source);
+}
+
+export function sourceLocation(source: MediaAssetSource): { bucket: string; key: string } {
 	if (source.type === "s3") {
 		return { bucket: source.bucket, key: source.key };
 	}
-	if (source.type === "upload") {
+	if (source.type === "file") {
 		return { bucket: config().MEDIA_BUCKET, key: source.key };
 	}
 	if (source.ingestedKey === undefined) {

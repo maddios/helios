@@ -6,14 +6,15 @@ const helios = new Helios({
 	baseUrl: requireEnv("HELIOS_BASE_URL")
 });
 
-const { uploadKey, request } = await helios.uploads.uploadAndEncode(requireEnv("MEDIA_PATH"), {
-	preset: "generic",
+const { file, request } = await helios.uploads.upload(requireEnv("MEDIA_PATH"), {
+	contentType: "video/mp4",
+	encode: { preset: "generic" },
 	onProgress: ({ uploadedBytes, totalBytes }) => console.log(`uploaded ${uploadedBytes} of ${totalBytes} bytes`)
 });
 
-const done = await helios.requests.wait(request.id, { timeoutMs: 10 * 60_000 });
+const done = await helios.requests.wait(request!.id, { timeoutMs: 10 * 60_000 });
 if (done.status === "ERROR") {
 	throw new Error(`Encode failed (${done.error?.code}): ${done.error?.message}`);
 }
 
-console.log(uploadKey, request.assetId, done.status);
+console.log(file.id, request!.assetId, done.status);

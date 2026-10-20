@@ -12,7 +12,10 @@ export async function ingestUrl(asset: MediaAsset, slug: string, options: { maxB
 	}
 	const key = ingestKey(slug, asset._id);
 	const response = await safeFetch(asset.source.url, { maxBytes: options.maxBytes, maxRedirects: 5 });
-	await objectStore().uploadStream(key, response.body, "application/octet-stream");
+	await objectStore().uploadStream(key, response.body, {
+		contentType: "application/octet-stream",
+		contentDisposition: "attachment"
+	});
 	await mediaAssets().updateOne(
 		{ _id: asset._id, accountId: asset.accountId },
 		{ $set: { "source.ingestedKey": key } }

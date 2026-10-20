@@ -3,7 +3,8 @@ import {
 	CompleteMultipartUploadCommand,
 	CreateMultipartUploadCommand,
 	ListPartsCommand,
-	S3Client
+	S3Client,
+	S3ServiceException
 } from "@aws-sdk/client-s3";
 import { mockClient } from "aws-sdk-client-mock";
 import { S3ObjectStore } from "../src/storage";
@@ -26,27 +27,63 @@ describe("S3ObjectStore uploads", () => {
 	});
 
 	it("presigns a PUT for the media bucket with the requested expiry", async () => {
-		const url = await store().presignPut(KEY, 900, "video/mp4");
+		const url = await store().presignPut(KEY, 900, {
+			contentType: "video/mp4",
+			contentDisposition: "inline",
+			contentLength: 1024
+		});
 
 		expect(url).toMatch(new RegExp(`^https://media-bucket\\.s3\\.${REGION}\\.amazonaws\\.com/${KEY}\\?`));
 		expect(url).toContain("X-Amz-Expires=900");
+		expect(decodeURIComponent(url)).toMatch(/X-Amz-SignedHeaders=.*content-disposition.*content-length.*content-type/);
 	});
 
 	it("creates a multipart upload in the media bucket and returns its UploadId", async () => {
 		s3Mock.on(CreateMultipartUploadCommand).resolves({ UploadId: "up-1" });
 
-		expect(await store().createMultipartUpload(KEY, "video/mp4")).toBe("up-1");
+		expect(await store().createMultipartUpload(KEY, { contentType: "video/mp4", contentDisposition: "inline" })).toBe(
+			"up-1"
+		);
 		expect(s3Mock.commandCall(0, CreateMultipartUploadCommand).args[0].input).toMatchObject({
 			Bucket: "media-bucket",
 			Key: KEY,
-			ContentType: "video/mp4"
+			ContentType: "video/mp4",
+			ContentDisposition: "inline"
 		});
 	});
 
 	it("fails when S3 returns no UploadId", async () => {
 		s3Mock.on(CreateMultipartUploadCommand).resolves({});
 
-		await expect(store().createMultipartUpload(KEY)).rejects.toThrow(/UploadId/);
+		await expect(
+			store().createMultipartUpload(KEY, { contentType: "video/mp4", contentDisposition: "inline" })
+		).rejects.toThrow(/UploadId/);
+	});
+
+	it("maps the part errors of CompleteMultipartUpload to 422 invalid_parts", async () => {
+		for (const name of ["InvalidPart", "InvalidPartOrder", "EntityTooSmall", "NoSuchUpload"]) {
+			s3Mock
+				.on(CompleteMultipartUploadCommand)
+				.rejects(new S3ServiceException({ name, message: name, $fault: "client", $metadata: { httpStatusCode: 400 } }));
+
+			await expect(store().completeMultipartUpload(KEY, "up-1", [{ partNumber: 1, etag: "e" }])).rejects.toMatchObject({
+				httpStatus: 422,
+				code: "invalid_parts"
+			});
+		}
+	});
+
+	it("treats NoSuchUpload on abort as already aborted", async () => {
+		s3Mock.on(AbortMultipartUploadCommand).rejects(
+			new S3ServiceException({
+				name: "NoSuchUpload",
+				message: "gone",
+				$fault: "client",
+				$metadata: { httpStatusCode: 404 }
+			})
+		);
+
+		await expect(store().abortMultipartUpload(KEY, "up-1")).resolves.toBeUndefined();
 	});
 
 	it("presigns a part URL carrying the part number and upload id", async () => {

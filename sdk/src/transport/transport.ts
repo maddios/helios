@@ -30,7 +30,8 @@ export interface JsonRequest {
 
 /** Options of a direct upload PUT to a presigned storage URL. */
 export interface PutOptions {
-	contentType?: string;
+	/** Headers sent exactly as given. For a single PUT these are the headers the server returned and signed. */
+	headers?: Record<string, string>;
 	timeoutMs: number;
 	signal?: AbortSignal;
 }
@@ -91,7 +92,7 @@ export class Transport {
 		const init: RequestInit = {
 			method: "PUT",
 			body,
-			headers: options.contentType === undefined ? {} : { "content-type": options.contentType }
+			headers: options.headers ?? {}
 		};
 		return this.retrying(options.signal, async () => {
 			const res = await this.send("idempotent", url, init, options.timeoutMs, options.signal);

@@ -1,5 +1,7 @@
 import type { ItemEventName, ItemStatus, RequestEventName, RequestStatus, WebhookEvent } from "@helios/contracts";
-import { jobReports, mediaAssets, pipelineItems, type PipelineItem, type PipelineRequest } from "../models";
+import { files, jobReports, mediaAssets, pipelineItems, type PipelineItem, type PipelineRequest } from "../models";
+import type { FileCallbackMessage } from "../pipeline";
+import { toFileView } from "../files";
 import { transcriptUrls } from "../transcripts";
 import { toAssetViews, toOutputViews, toRequestView } from "../views";
 
@@ -74,6 +76,25 @@ export async function requestEnvelope(
 	});
 	const [asset] = await toAssetViews(request.accountId, [await loadAsset(request)]);
 	return { id, event, createdAt, sequence, data: { request: requestView, asset } };
+}
+
+export async function fileEnvelope(
+	id: string,
+	createdAt: string,
+	message: FileCallbackMessage,
+	fileId: string
+): Promise<WebhookEvent> {
+	const file = await files().findOne({ _id: fileId });
+	if (file === null) {
+		throw new Error(`File ${fileId} not found`);
+	}
+	return {
+		id,
+		event: message.event,
+		createdAt,
+		sequence: message.sequence,
+		data: { file: toFileView(file) }
+	};
 }
 
 async function loadItem(itemId: string): Promise<PipelineItem> {

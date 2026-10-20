@@ -10,6 +10,7 @@ export interface PinnedRequestOptions {
 	timeoutSec: number;
 	headers?: OutgoingHttpHeaders;
 	body?: string;
+	signal?: AbortSignal;
 }
 
 export function pinnedRequest(target: ResolvedUrl, options: PinnedRequestOptions): Promise<IncomingMessage> {
@@ -19,7 +20,8 @@ export function pinnedRequest(target: ResolvedUrl, options: PinnedRequestOptions
 			agent: false,
 			lookup: pinnedLookup(target),
 			method: options.method,
-			headers: options.headers
+			headers: options.headers,
+			signal: options.signal
 		};
 		const request =
 			target.url.protocol === "https:"

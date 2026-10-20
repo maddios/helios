@@ -1,62 +1,49 @@
-import type { MultipartCreateResponse } from "@helios/contracts";
 import { UploadError } from "../errors.js";
+import type { CreateUploadResponse } from "../types.js";
 import type { UploadApi } from "./api.js";
 import type { Source } from "./input.js";
 import { partitionChunks } from "./partition.js";
 import { forEachBounded } from "./pool.js";
 import type { UploadOptions, UploadSettings } from "./options.js";
 
-interface CompletedPart {
+type MultipartCreated = Extract<CreateUploadResponse, { mode: "multipart" }>;
+
+/** A part storage accepted, as `uploads.complete` takes it. */
+export interface CompletedPart {
 	partNumber: number;
 	etag: string;
 }
 
 /**
- * Uploads a source in parts and completes the multipart upload. The upload is aborted on the server if any step fails.
+ * Uploads a source in parts to the presigned part URLs of a multipart upload.
  *
  * @param api Upload operations of the API.
+ * @param created The multipart upload the server created for the source.
  * @param source The normalised input.
- * @param options Progress, cancellation and the resolved settings.
- * @returns The upload key of the completed object.
- * @throws {UploadError} With code `upload_failed`, `missing_etag` or `size_mismatch`.
+ * @param options Progress and cancellation.
+ * @param settings The resolved concurrency and part timeout.
+ * @returns The part numbers and ETags, to pass to `uploads.complete`.
+ * @throws {UploadError} With code `missing_etag` or `size_mismatch`.
  * @throws {AbortedError} When `options.signal` fires.
  */
 export async function uploadMultipart(
 	api: UploadApi,
+	created: MultipartCreated,
 	source: Source,
-	options: UploadOptions & UploadSettings
-): Promise<string> {
-	const created = await api.createMultipart(
-		{ filename: source.filename, sizeBytes: source.sizeBytes, contentType: options.contentType },
-		options.signal
-	);
-	try {
-		const parts = await uploadParts(api, created, source, options);
-		await api.completeMultipart(created.uploadId, { uploadKey: created.uploadKey, parts }, options.signal);
-	} catch (err) {
-		await api.abortMultipart(created.uploadId, created.uploadKey).catch(() => undefined);
-		throw err;
-	}
-	return created.uploadKey;
-}
-
-async function uploadParts(
-	api: UploadApi,
-	created: MultipartCreateResponse,
-	source: Source,
-	options: UploadOptions & UploadSettings
+	options: UploadOptions,
+	settings: UploadSettings
 ): Promise<CompletedPart[]> {
 	const completed: CompletedPart[] = [];
 	let uploadedBytes = 0;
 	await forEachBounded(
 		partitionChunks(source.chunks, created.partSizeBytes),
-		options.concurrency,
+		settings.concurrency,
 		async (body, index) => {
 			const part = created.parts[index];
 			if (part === undefined) {
 				throw sizeMismatch("The source is larger than its declared size");
 			}
-			const etag = await api.putObject(part.url, body, { timeoutMs: options.partTimeoutMs, signal: options.signal });
+			const etag = await api.putObject(part.url, body, { timeoutMs: settings.partTimeoutMs, signal: options.signal });
 			if (etag === null) {
 				throw new UploadError("missing_etag", "Storage did not return an ETag for the part");
 			}

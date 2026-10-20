@@ -2,18 +2,17 @@ import { randomUUID } from "node:crypto";
 import { ForbiddenError, UnprocessableError, type EncodeSource } from "@helios/contracts";
 import { config } from "../config";
 import { insertAsset } from "../assets";
+import { loadStoredFile } from "../files";
 import type { Account, MediaAsset, MediaAssetSource } from "../models";
 import { objectStore } from "../storage";
-import { assertOwnedUploadKey } from "../uploads";
 
 export async function toAssetSource(account: Account, source: EncodeSource): Promise<MediaAssetSource> {
 	if ("url" in source) {
 		return { type: "url", url: source.url };
 	}
-	if ("uploadKey" in source) {
-		assertOwnedUploadKey(account.slug, source.uploadKey);
-		await assertSourceExists(config().MEDIA_BUCKET, source.uploadKey);
-		return { type: "upload", key: source.uploadKey };
+	if ("fileId" in source) {
+		const file = await loadStoredFile(account._id, source.fileId);
+		return { type: "file", fileId: file._id, key: file.key };
 	}
 	if (source.bucket === config().MEDIA_BUCKET || !account.sourceBuckets.includes(source.bucket)) {
 		throw new ForbiddenError("Source bucket is not allowed for this account");

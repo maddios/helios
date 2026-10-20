@@ -50,14 +50,15 @@ describe("S3ObjectStore", () => {
 		const bytes = await store().uploadStream(
 			"acme/sources/a1/original",
 			Readable.from([Buffer.from("abc"), Buffer.from("de")]),
-			"video/mp4"
+			{ contentType: "video/mp4", contentDisposition: "inline" }
 		);
 
 		expect(bytes).toBe(5);
 		expect(s3Mock.commandCall(0, PutObjectCommand).args[0].input).toMatchObject({
 			Bucket: "media-bucket",
 			Key: "acme/sources/a1/original",
-			ContentType: "video/mp4"
+			ContentType: "video/mp4",
+			ContentDisposition: "inline"
 		});
 	});
 

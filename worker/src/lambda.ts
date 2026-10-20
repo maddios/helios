@@ -2,12 +2,13 @@ import type { Context, SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda"
 import { config as coreConfig, contextLogger, initDb, queueFromArn, type ItemMessage } from "@helios/core";
 import { z } from "zod";
 import { validateWorkerConfig } from "./config";
+import { isFileIngest, runFileIngest, type WorkerMessage } from "./fileIngest";
 import { processItem, type ItemOutcome } from "./processItem";
 
 const ABORT_BEFORE_TIMEOUT_MS = 10_000;
 const TIMEOUT_REASON = "Lambda timeout approaching";
 
-const BodySchema = z.object({ itemId: z.string().min(1) });
+const BodySchema = z.union([z.object({ itemId: z.string().min(1) }), z.object({ fileId: z.string().min(1) })]);
 
 export async function handler(event: SQSEvent, context: Context): Promise<SQSBatchResponse> {
 	context.callbackWaitsForEmptyEventLoop = false;
@@ -27,10 +28,13 @@ async function runRecord(record: SQSRecord, context: Context): Promise<ItemOutco
 		Math.max(0, context.getRemainingTimeInMillis() - ABORT_BEFORE_TIMEOUT_MS)
 	);
 	try {
-		const { itemId } = BodySchema.parse(JSON.parse(record.body));
+		const body: WorkerMessage = BodySchema.parse(JSON.parse(record.body));
 		await initDb(coreConfig().MONGO_URI);
+		if (isFileIngest(body)) {
+			return runFileIngest(body.fileId, AbortSignal.timeout(coreConfig().LAMBDA_MAX_DURATION_SEC * 1000));
+		}
 		return await processItem({
-			itemId,
+			itemId: body.itemId,
 			messageId: record.messageId,
 			extendVisibility: (seconds) =>
 				queueFromArn<ItemMessage>(record.eventSourceARN).changeVisibility(

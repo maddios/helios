@@ -6,7 +6,7 @@ import { ResponseTooLargeError, UnprocessableSourceError } from "./errors";
 import { config } from "../config";
 import { pinnedRequest } from "./pinnedRequest";
 
-export type SafeFetchOptions = { maxBytes: number; maxRedirects: number; resolve?: Resolver };
+export type SafeFetchOptions = { maxBytes: number; maxRedirects: number; resolve?: Resolver; signal?: AbortSignal };
 export type SafeFetchResponse = { contentType?: string; contentLength?: number; body: Readable };
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
@@ -20,7 +20,7 @@ export async function safeFetch(input: string, options: SafeFetchOptions): Promi
 async function fetchFollowingRedirects(start: ResolvedUrl, options: SafeFetchOptions): Promise<IncomingMessage> {
 	let target = start;
 	for (let redirects = 0; ; redirects++) {
-		const response = await fetchPinned(target);
+		const response = await fetchPinned(target, options.signal);
 		const location = redirectLocation(response);
 		if (location === undefined) {
 			return response;
@@ -34,10 +34,13 @@ async function fetchFollowingRedirects(start: ResolvedUrl, options: SafeFetchOpt
 	}
 }
 
-async function fetchPinned(target: ResolvedUrl): Promise<IncomingMessage> {
+async function fetchPinned(target: ResolvedUrl, signal?: AbortSignal): Promise<IncomingMessage> {
 	try {
-		return await pinnedRequest(target, { method: "GET", timeoutSec: config().INGEST_TIMEOUT_SEC });
+		return await pinnedRequest(target, { method: "GET", timeoutSec: config().INGEST_TIMEOUT_SEC, signal });
 	} catch (err) {
+		if (signal?.aborted === true) {
+			throw err;
+		}
 		throw new UnprocessableSourceError(`Fetch failed: ${err instanceof Error ? err.message : String(err)}`);
 	}
 }

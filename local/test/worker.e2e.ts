@@ -119,7 +119,7 @@ async function callbackRequestIds(expected: Map<string, number>): Promise<Map<st
 	const queue = queueFor<CallbackMessage>("callbacks.fifo");
 	while (Date.now() < deadline) {
 		for (const message of await queue.poll(10, 1)) {
-			const key = message.body.requestId;
+			const key = "requestId" in message.body ? message.body.requestId : message.body.fileId;
 			seen.set(key, (seen.get(key) ?? 0) + 1);
 			await queue.ack(message);
 		}

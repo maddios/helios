@@ -25,6 +25,7 @@
 		"test:local:lifecycle": "jest -c jest.local.config.js local/test/lifecycle.e2e.ts",
 		"test:local:api": "jest -c jest.local.config.js local/test/api.e2e.ts",
 		"test:local:browserUpload": "jest -c jest.local.config.js local/test/browserUpload.e2e.ts",
+		"test:local:files": "jest -c jest.local.config.js local/test/files.e2e.ts",
 		"test:local:eventbridge": "jest -c jest.local.config.js local/test/eventbridge.e2e.ts",
 		"test:local:lambdas": "jest -c jest.local.config.js local/test/lambdas.e2e.ts",
 		"test:local:transcribe": "jest -c jest.local.config.js local/test/transcribe.e2e.ts",

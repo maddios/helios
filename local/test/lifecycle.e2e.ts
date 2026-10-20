@@ -127,7 +127,7 @@ async function receiveFor(requestId: string): Promise<CallbackMessage[]> {
 	const queue = callbackQueue();
 	const matches: CallbackMessage[] = [];
 	for (const message of await queue.poll(10, 1)) {
-		if (message.body.requestId === requestId) {
+		if ("requestId" in message.body && message.body.requestId === requestId) {
 			matches.push(message.body);
 		}
 		await queue.ack(message);

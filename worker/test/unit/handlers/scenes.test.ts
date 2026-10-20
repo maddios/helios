@@ -64,7 +64,7 @@ function videoAsset(outputs: MediaAsset["outputs"], version = 1): MediaAsset {
 	return {
 		_id: "asset",
 		accountId: "acct",
-		source: { type: "upload", key: "k" },
+		source: { type: "file", fileId: "file-1", key: "k" },
 		sourceMetadata: { type: "video", durationSec: 9 },
 		version,
 		outputs,

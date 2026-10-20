@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { ConflictError, type CreateAccountRequest } from "@helios/contracts";
 import { isDuplicateKeyError } from "../db";
 import { assertDestination } from "../destinations";
+import { assertUploadPolicy } from "../policy";
 import { accounts, type Account } from "../models";
 import { assertSourceBuckets } from "./assertSourceBuckets";
 import { generateWebhookSecret } from "./generateWebhookSecret";
@@ -10,6 +11,9 @@ export async function createAccount(input: CreateAccountRequest): Promise<Accoun
 	assertSourceBuckets(input.sourceBuckets);
 	if (input.destination !== undefined) {
 		await assertDestination(input.destination);
+	}
+	if (input.uploadPolicy !== undefined) {
+		assertUploadPolicy(input.uploadPolicy);
 	}
 
 	const account: Account = {

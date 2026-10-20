@@ -259,10 +259,8 @@ describe("destination and callbackUrl together", () => {
 		expect(JSON.stringify(res.body.error.details)).toContain(DESTINATION_CONFLICT);
 	});
 
-	it("rejects multipart complete encode options with 400", async () => {
-		const res = await account().post("/uploads/multipart/upload-1/complete", {
-			uploadKey: "uploads/a.mp4",
-			parts: [{ partNumber: 1, etag: "etag-1" }],
+	it("rejects upload complete encode options with 400", async () => {
+		const res = await account().post(`/uploads/${UNKNOWN_ID}/complete`, {
 			encode: { preset: "generic", ...both }
 		});
 

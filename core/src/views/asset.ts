@@ -45,8 +45,8 @@ function toSourceView(source: MediaAssetSource): AssetView["source"] {
 	if (source.type === "s3") {
 		return { type: "s3", bucket: source.bucket, key: source.key };
 	}
-	if (source.type === "upload") {
-		return { type: "upload", key: source.key };
+	if (source.type === "file") {
+		return { type: "file", fileId: source.fileId, key: source.key };
 	}
 	return { type: "url", url: source.url };
 }

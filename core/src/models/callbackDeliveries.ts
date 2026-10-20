@@ -4,7 +4,8 @@ import { db } from "../db";
 
 export const CallbackDeliverySchema = z.object({
 	_id: z.string(),
-	requestId: z.string(),
+	requestId: z.string().optional(),
+	fileId: z.string().optional(),
 	accountId: z.string(),
 	destinationType: z.enum(["webhook", "eventbridge"]).optional(),
 	event: z.string(),

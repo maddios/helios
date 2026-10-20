@@ -4,6 +4,7 @@ import { adminDestinationRoutes } from "./admin/destinations";
 import { adminPresetRoutes } from "./admin/presets";
 import { adminUsageRoutes } from "./admin/usage";
 import { assetJobRoutes } from "./assetJobs";
+import { accountRoutes } from "./account";
 import { assetRoutes } from "./assets";
 import { destinationRoutes } from "./destinations";
 import { encodeRoutes } from "./encode";
@@ -22,7 +23,9 @@ export const apiEndpoints = [
 	...tagged("Health", healthRoutes),
 	...tagged("Encoding", [...encodeRoutes, ...assetJobRoutes]),
 	...tagged("Assets", assetRoutes),
-	...tagged("Uploads", [...uploadRoutes, ...fileRoutes]),
+	...tagged("Uploads", uploadRoutes),
+	...tagged("Files", fileRoutes),
+	...tagged("Account", accountRoutes),
 	...tagged("Requests", requestRoutes),
 	...tagged("Presets", presetRoutes),
 	...tagged("Usage", usageRoutes),

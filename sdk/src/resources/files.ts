@@ -1,11 +1,11 @@
-import type { FileUploadRequest, FileUploadResponse } from "@helios/contracts";
+import type { FileDeletedResponse, FileFromUrlRequest, FileListQuery, FileListResponse, FileView } from "../types.js";
 import type { Transport } from "../transport/transport.js";
 
 /**
- * Presigns uploads of raw, non-media files (for example captions or documents) that are not encoded.
+ * Lists, reads and deletes stored files, and stores files fetched from a public URL.
  *
  * @example
- * const { uploadUrl, url } = await helios.files.create({ filename: "brief.pdf", contentType: "application/pdf" });
+ * const { files } = await helios.files.list({ externalId: "logo-42" });
  */
 export class Files {
 	/**
@@ -15,19 +15,71 @@ export class Files {
 	constructor(private readonly transport: Transport) {}
 
 	/**
-	 * Gets a presigned PUT URL for a raw file. Once uploaded, the file is served at `url`.
+	 * Lists files, newest first. Deleted files are not listed.
 	 *
-	 * @param request Filename and optional content type.
-	 * @returns The file key, the presigned upload URL, the CDN url and the URL's expiry.
-	 * @throws {ValidationError} When the filename is empty or too long (400).
+	 * @param query Page size, cursor, and filters by externalId or content type prefix.
+	 * @returns A page of files and the cursor of the next page, when there is one.
 	 * @example
-	 * const file = await helios.files.create({ filename: "brief.pdf" });
+	 * const page = await helios.files.list({ contentTypePrefix: "image/", limit: 50 });
 	 */
-	create(request: FileUploadRequest): Promise<FileUploadResponse> {
-		return this.transport.json<FileUploadResponse>({
+	list(query: FileListQuery = {}): Promise<FileListResponse> {
+		return this.transport.json<FileListResponse>({
+			method: "GET",
+			retry: "idempotent",
+			path: "/files",
+			query
+		});
+	}
+
+	/**
+	 * Gets a file with its CDN url. Image files can be transformed through the `images` helper.
+	 *
+	 * @param id File id.
+	 * @returns The file.
+	 * @throws {NotFoundError} When the file does not exist or was deleted (404).
+	 * @example
+	 * const file = await helios.files.get(fileId);
+	 */
+	get(id: string): Promise<FileView> {
+		return this.transport.json<FileView>({
+			method: "GET",
+			retry: "idempotent",
+			path: `/files/${encodeURIComponent(id)}`
+		});
+	}
+
+	/**
+	 * Deletes a file: its object, its cached image variants and its CDN copies. The file is gone from the API at once.
+	 *
+	 * @param id File id.
+	 * @returns The id of the deleted file.
+	 * @throws {NotFoundError} When the file does not exist or was already deleted (404).
+	 * @example
+	 * await helios.files.delete(fileId);
+	 */
+	delete(id: string): Promise<FileDeletedResponse> {
+		return this.transport.json<FileDeletedResponse>({
+			method: "DELETE",
+			retry: "idempotent",
+			path: `/files/${encodeURIComponent(id)}`
+		});
+	}
+
+	/**
+	 * Stores a file that Helios fetches from a public URL. The file is PENDING until the fetch finishes; the webhook then
+	 * receives `file.stored` or `file.failed`.
+	 *
+	 * @param request The public http(s) URL, and an optional filename and externalId.
+	 * @returns The PENDING file.
+	 * @throws {ValidationError} When the URL or filename is invalid (400).
+	 * @example
+	 * const pending = await helios.files.fromUrl({ url: "https://example.com/logo.png", externalId: "logo-42" });
+	 */
+	fromUrl(request: FileFromUrlRequest): Promise<FileView> {
+		return this.transport.json<FileView>({
 			method: "POST",
 			retry: "rateLimitOnly",
-			path: "/files",
+			path: "/files/from-url",
 			body: request
 		});
 	}

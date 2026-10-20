@@ -25,7 +25,7 @@ export type OpenApiDocument = Record<string, unknown>;
  *
  * @example
  * const helios = new Helios({ apiKey: "sk_live_...", baseUrl: "https://helios.example.com" });
- * const { uploadKey, request } = await helios.uploads.uploadAndEncode("./clip.mp4", { preset: "generic" });
+ * const { file, request } = await helios.uploads.upload("./clip.mp4", { contentType: "video/mp4", encode: { preset: "generic" } });
  * const done = await helios.requests.wait(request.id);
  */
 export class Helios {
@@ -35,15 +35,15 @@ export class Helios {
 	readonly assets: Assets;
 	/** Reads, cancels and waits for requests; includes callback deliveries. */
 	readonly requests: Requests;
-	/** Uploads media to storage, with multipart for large files. */
+	/** Stores files: uploads, then keeps them or encodes them. */
 	readonly uploads: Uploads;
-	/** Presigns raw, non-media file uploads. */
+	/** Lists, reads and deletes stored files, and stores files from a URL. */
 	readonly files: Files;
 	/** Manages account presets. */
 	readonly presets: Presets;
 	/** Tests destinations and prepares EventBridge buses. */
 	readonly destinations: Destinations;
-	/** Reads and sets the account's default delivery destination. */
+	/** Reads and sets the account's default delivery destination and upload policy. */
 	readonly account: Account;
 	/** Reads resource usage. */
 	readonly usage: Usage;
@@ -65,7 +65,7 @@ export class Helios {
 		this.encodes = new Encodes(this.transport);
 		this.assets = new Assets(this.transport);
 		this.requests = new Requests(this.transport);
-		this.uploads = new Uploads(this.transport, this.encodes);
+		this.uploads = new Uploads(this.transport);
 		this.files = new Files(this.transport);
 		this.presets = new Presets(this.transport);
 		this.destinations = new Destinations(this.transport);

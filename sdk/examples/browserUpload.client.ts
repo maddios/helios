@@ -1,4 +1,4 @@
-import { uploadParts, type MultipartUpload, type PartUrl, type UploadedPart } from "@partnrup/helios-sdk/browser";
+import { upload, type BrowserUpload, type PartUrl, type UploadedPart } from "@partnrup/helios-sdk/browser";
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
 	const res = await fetch(path, {
@@ -11,15 +11,19 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 
 export async function uploadVideo(
 	file: Blob,
-	upload: MultipartUpload,
+	created: BrowserUpload,
 	onProgress: (fraction: number) => void
 ): Promise<void> {
-	const uploadedParts = await postJson<UploadedPart[]>("/api/uploads/stored", upload);
-	const parts = await uploadParts(upload, file, {
+	const { parts } = await upload(created, file, {
 		concurrency: 4,
-		uploadedParts,
 		onProgress: ({ uploadedBytes, totalBytes }) => onProgress(uploadedBytes / totalBytes),
-		signParts: (partNumbers) => postJson<PartUrl[]>("/api/uploads/renew", { ...upload, partNumbers })
+		signParts: (partNumbers) => postJson<PartUrl[]>("/api/uploads/renew", { fileId: created.fileId, partNumbers })
 	});
-	await postJson("/api/uploads/finish", { ...upload, parts });
+	await postJson("/api/uploads/finish", { fileId: created.fileId, parts });
+}
+
+export async function resumeVideo(file: Blob, created: BrowserUpload): Promise<void> {
+	const uploadedParts = await postJson<UploadedPart[]>("/api/uploads/stored", { fileId: created.fileId });
+	const { parts } = await upload(created, file, { uploadedParts });
+	await postJson("/api/uploads/finish", { fileId: created.fileId, parts });
 }

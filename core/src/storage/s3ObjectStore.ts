@@ -18,9 +18,26 @@ import {
 import { S3ServiceException } from "@aws-sdk/client-s3";
 import { Upload } from "@aws-sdk/lib-storage";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
-import type { ObjectInfo, ObjectStore, UploadedPart } from "./types";
+import { UnprocessableError } from "@helios/contracts";
+import type { ObjectInfo, ObjectStore, ObjectWriteOptions, PresignPutOptions, UploadedPart } from "./types";
 
 const DELETE_BATCH_SIZE = 1000;
+const INVALID_PART_CODES = new Set(["InvalidPart", "InvalidPartOrder", "EntityTooSmall", "NoSuchUpload"]);
+
+function isNotFound(err: unknown): boolean {
+	return err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404;
+}
+
+function isCode(err: unknown, codes: ReadonlySet<string>): boolean {
+	return err instanceof S3ServiceException && codes.has(err.name);
+}
+
+function writeMetadata(options: ObjectWriteOptions) {
+	return {
+		ContentType: options.contentType,
+		ContentDisposition: options.contentDisposition
+	};
+}
 
 export class S3ObjectStore implements ObjectStore {
 	constructor(
@@ -53,7 +70,7 @@ export class S3ObjectStore implements ObjectStore {
 		return size;
 	}
 
-	async uploadStream(key: string, body: Readable, contentType: string): Promise<number> {
+	async uploadStream(key: string, body: Readable, options: ObjectWriteOptions): Promise<number> {
 		let bytes = 0;
 		const counter = new Transform({
 			transform(chunk: Buffer, _encoding, callback) {
@@ -63,10 +80,10 @@ export class S3ObjectStore implements ObjectStore {
 		});
 		const upload = new Upload({
 			client: this.client,
-			params: { Bucket: this.mediaBucket, Key: key, Body: counter, ContentType: contentType }
+			params: { Bucket: this.mediaBucket, Key: key, Body: counter, ...writeMetadata(options) }
 		}).done();
 		try {
-			await Promise.all([upload, pipeline(body, counter)]);
+			await Promise.all([upload, pipeline(body, counter, { signal: options.signal })]);
 		} catch (err) {
 			body.destroy();
 			throw err;
@@ -99,11 +116,21 @@ export class S3ObjectStore implements ObjectStore {
 			);
 			return { size: ContentLength, etag: ETag };
 		} catch (err) {
-			if (err instanceof S3ServiceException && err.$metadata.httpStatusCode === 404) {
+			if (isNotFound(err)) {
 				return undefined;
 			}
 			throw err;
 		}
+	}
+
+	async readHead(key: string, bytes: number): Promise<Buffer> {
+		const response = await this.client.send(
+			new GetObjectCommand({ Bucket: this.mediaBucket, Key: key, Range: `bytes=0-${bytes - 1}` })
+		);
+		if (response.Body === undefined) {
+			throw new Error(`Object ${key} has no body`);
+		}
+		return Buffer.from(await response.Body.transformToByteArray());
 	}
 
 	async downloadBuffer(key: string, signal?: AbortSignal): Promise<Buffer> {
@@ -146,17 +173,26 @@ export class S3ObjectStore implements ObjectStore {
 		}
 	}
 
-	presignPut(key: string, expiresSec: number, contentType?: string): Promise<string> {
+	presignPut(key: string, expiresSec: number, options: PresignPutOptions): Promise<string> {
 		return getSignedUrl(
 			this.client,
-			new PutObjectCommand({ Bucket: this.mediaBucket, Key: key, ContentType: contentType }),
-			{ expiresIn: expiresSec }
+			new PutObjectCommand({
+				Bucket: this.mediaBucket,
+				Key: key,
+				ContentLength: options.contentLength,
+				...writeMetadata(options)
+			}),
+			{
+				expiresIn: expiresSec,
+				unsignableHeaders: new Set(),
+				signableHeaders: new Set(["content-type", "content-disposition", "content-length"])
+			}
 		);
 	}
 
-	async createMultipartUpload(key: string, contentType?: string): Promise<string> {
+	async createMultipartUpload(key: string, options: ObjectWriteOptions): Promise<string> {
 		const { UploadId } = await this.client.send(
-			new CreateMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, ContentType: contentType })
+			new CreateMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, ...writeMetadata(options) })
 		);
 		if (UploadId === undefined) {
 			throw new Error(`S3 did not return an UploadId for ${key}`);
@@ -177,18 +213,37 @@ export class S3ObjectStore implements ObjectStore {
 		uploadId: string,
 		parts: { partNumber: number; etag: string }[]
 	): Promise<void> {
-		await this.client.send(
-			new CompleteMultipartUploadCommand({
-				Bucket: this.mediaBucket,
-				Key: key,
-				UploadId: uploadId,
-				MultipartUpload: { Parts: parts.map(({ partNumber, etag }) => ({ PartNumber: partNumber, ETag: etag })) }
-			})
-		);
+		try {
+			await this.client.send(
+				new CompleteMultipartUploadCommand({
+					Bucket: this.mediaBucket,
+					Key: key,
+					UploadId: uploadId,
+					MultipartUpload: { Parts: parts.map(({ partNumber, etag }) => ({ PartNumber: partNumber, ETag: etag })) }
+				})
+			);
+		} catch (err) {
+			if (isCode(err, INVALID_PART_CODES)) {
+				throw new UnprocessableError(
+					err instanceof Error ? err.message : "The uploaded parts are not valid",
+					{ code: (err as S3ServiceException).name },
+					"invalid_parts"
+				);
+			}
+			throw err;
+		}
 	}
 
 	async abortMultipartUpload(key: string, uploadId: string): Promise<void> {
-		await this.client.send(new AbortMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId }));
+		try {
+			await this.client.send(
+				new AbortMultipartUploadCommand({ Bucket: this.mediaBucket, Key: key, UploadId: uploadId })
+			);
+		} catch (err) {
+			if (!isCode(err, new Set(["NoSuchUpload"]))) {
+				throw err;
+			}
+		}
 	}
 
 	async listParts(key: string, uploadId: string): Promise<UploadedPart[]> {

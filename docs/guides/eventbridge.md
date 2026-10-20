@@ -62,7 +62,7 @@ Or set it per request with the `destination` field on these endpoints:
 - `POST /encode`
 - `POST /assets/{id}/re-encode`
 - `POST /assets/{id}/post-process`
-- `POST /uploads/multipart/{uploadId}/complete`, inside `encode`
+- `POST /uploads/{fileId}/complete`, inside `encode`
 
 A request destination overrides the account default. `callbackUrl` is shorthand for a webhook destination, so it cannot be combined with `destination` in the same request.
 

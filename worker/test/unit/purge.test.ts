@@ -21,7 +21,7 @@ const SLUG = "acme";
 const ASSET = {
 	_id: "asset-1",
 	accountId: "account-1",
-	source: { type: "upload", key: `${SLUG}/uploads/up-1` }
+	source: { type: "file", fileId: "file-1", key: `${SLUG}/files/file-1/clip.mp4` }
 };
 
 function fakeStore(initialKeys: string[]) {
@@ -70,20 +70,20 @@ describe("purge handler", () => {
 		] as unknown as PipelineItem[]);
 	});
 
-	it("deletes the asset's media, source copies and upload, and its documents, keeping the purge item", async () => {
+	it("deletes the asset's media and source copies and its documents, keeping the purge item and the stored file", async () => {
 		const store = fakeStore([
 			`${SLUG}/media/asset-1/mp4_360.mp4`,
 			`${SLUG}/media/asset-1/tmb/0001.jpg`,
 			`resize_cache/${SLUG}/media/asset-1/_img/w_100/tmb/0001.jpg`,
 			`${SLUG}/sources/asset-1/original`,
-			`${SLUG}/uploads/up-1`,
+			`${SLUG}/files/file-1/clip.mp4`,
 			`${SLUG}/media/asset-2/mp4_360.mp4`
 		]);
 		jest.mocked(objectStore).mockReturnValue(store as never);
 
 		await purgeHandler(contextFor());
 
-		expect([...store.keys]).toEqual([`${SLUG}/media/asset-2/mp4_360.mp4`]);
+		expect([...store.keys].sort()).toEqual([`${SLUG}/files/file-1/clip.mp4`, `${SLUG}/media/asset-2/mp4_360.mp4`]);
 		expect(await cdnInvalidations().findOne({ _id: `${PURGE_REQUEST}:purge` })).toEqual(
 			expect.objectContaining({ paths: [`/${SLUG}/media/asset-1/*`], status: "PENDING" })
 		);

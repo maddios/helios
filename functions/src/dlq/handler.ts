@@ -1,6 +1,12 @@
-import { failAnalyze, failDeadItem, markDeliveryFailed, queueNameFromArn } from "@helios/core";
+import { failAnalyze, failDeadFile, failDeadItem, markDeliveryFailed, queueNameFromArn } from "@helios/core";
 import type { SQSBatchResponse, SQSEvent, SQSRecord } from "aws-lambda";
-import { AnalyzeMessageSchema, CallbackMessageSchema, ItemMessageSchema } from "../sqs/messages";
+import { z } from "zod";
+import {
+	AnalyzeMessageSchema,
+	CallbackMessageSchema,
+	FileIngestMessageSchema,
+	ItemMessageSchema
+} from "../sqs/messages";
 import { parseBody } from "../sqs/records";
 import { runRecords } from "../sqs/runRecords";
 
@@ -12,7 +18,10 @@ interface DeadLetterRoute {
 const ROUTES: DeadLetterRoute[] = [
 	{
 		queue: /-fargate-p\d+-dlq$/,
-		fail: async (record) => failDeadItem(parseBody(record, ItemMessageSchema).itemId)
+		fail: async (record) => {
+			const body = parseBody(record, z.union([FileIngestMessageSchema, ItemMessageSchema]));
+			return "fileId" in body ? failDeadFile(body.fileId) : failDeadItem(body.itemId);
+		}
 	},
 	{
 		queue: /-analyze-dlq$/,

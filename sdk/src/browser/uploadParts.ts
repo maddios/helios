@@ -12,11 +12,11 @@ import type { CompletedPart, MultipartUpload, UploadedPart, UploadPartsOptions }
  * The file is cut into `partSizeBytes` slices. Each slice is PUT by XHR with bounded concurrency, so progress is reported
  * as bytes are sent. Network errors and 5xx or 429 responses are retried with backoff. A 403 renews the part's URL through
  * `signParts`. Parts listed in `uploadedParts` are skipped, which resumes an interrupted upload. The returned list goes
- * to the backend's `completeMultipart`.
+ * to the backend's `uploads.complete`.
  *
  * Browser CORS must allow the page's origin and expose `ETag` (see the bucket CORS rules).
  *
- * @param upload The upload from the backend: `uploadId`, `uploadKey`, `partSizeBytes` and the part URLs.
+ * @param upload The upload from the backend: `uploadId`, `fileId`, `partSizeBytes` and the part URLs.
  * @param file The file to upload.
  * @param options Concurrency, progress, cancellation, URL renewal, resume and retries.
  * @returns The part number and ETag of every part, sorted by part number.
@@ -26,14 +26,14 @@ import type { CompletedPart, MultipartUpload, UploadedPart, UploadPartsOptions }
  * @throws {PartUrlExpiredError} When a part URL expired and could not be renewed.
  * @example
  * // Backend (secret key): create the upload and pass `upload` to the browser.
- * const upload = await helios.uploads.createMultipart({ filename: file.name, sizeBytes: file.size });
+ * const upload = await helios.uploads.create({ filename: file.name, sizeBytes: file.size, contentType: file.type });
  * // Browser: upload the parts, then return the ETags to the backend.
  * const parts = await uploadParts(upload, file, {
  *   concurrency: 4,
  *   onProgress: ({ uploadedBytes, totalBytes }) => setProgress(uploadedBytes / totalBytes),
  *   signParts: (partNumbers) => fetch("/api/uploads/parts", { method: "POST", body: JSON.stringify(partNumbers) }).then((r) => r.json())
  * });
- * // Backend: await helios.uploads.completeMultipart(upload.uploadId, { uploadKey: upload.uploadKey, parts });
+ * // Backend: await helios.uploads.complete(upload.fileId, { parts, store: true });
  */
 export async function uploadParts(
 	upload: MultipartUpload,

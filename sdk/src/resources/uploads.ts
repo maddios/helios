@@ -1,33 +1,16 @@
 import type {
-	MultipartCompleteResponse,
-	MultipartCreateRequest,
-	MultipartCreateResponse,
-	MultipartListPartsResponse,
-	MultipartSignPartsResponse,
-	PresignedUploadRequest,
-	PresignedUploadResponse,
-	RequestView
-} from "@helios/contracts";
-import { AbortedError, HeliosError, UploadEncodeError } from "../errors.js";
-import { withIdempotencyKey } from "../idempotency.js";
+	CompleteUploadRequest,
+	CompleteUploadResponse,
+	CreateUploadRequest,
+	CreateUploadResponse,
+	SignUploadPartsResponse,
+	UploadPartsListResponse
+} from "../types.js";
+import type { Transport } from "../transport/transport.js";
 import type { UploadApi } from "../uploads/api.js";
 import type { UploadInput } from "../uploads/input.js";
-import type { UploadOptions } from "../uploads/options.js";
+import type { UploadCall } from "../uploads/options.js";
 import { storeUpload } from "../uploads/store.js";
-import type { Transport } from "../transport/transport.js";
-import type { EncodeOptions, MultipartCompleteRequest } from "../types.js";
-import type { Encodes } from "./encodes.js";
-
-/** Options of {@link Uploads.uploadAndEncode}: upload options plus the encode options. */
-export type UploadAndEncodeOptions = UploadOptions & EncodeOptions;
-
-/** Result of {@link Uploads.uploadAndEncode}. */
-export interface UploadAndEncodeResult {
-	/** Storage key of the uploaded object. */
-	uploadKey: string;
-	/** The encode request created for the upload. */
-	request: RequestView;
-}
 
 /** Cancellation of a single call. */
 export interface UploadCallOptions {
@@ -36,111 +19,67 @@ export interface UploadCallOptions {
 }
 
 /**
- * Uploads media to Helios storage, with direct presigned PUTs or multipart upload for large files.
- *
- * `upload` and `uploadAndEncode` handle everything. The lower-level methods (`presign`, `createMultipart`,
- * `signParts`, `listParts`, `completeMultipart`, `abortMultipart`) are for callers that drive the storage PUTs
- * themselves, or that hand the parts to the browser (see `@partnrup/helios-sdk/browser`).
+ * Stores files in Helios: one call uploads a file and keeps it, or stores it and encodes it. Small files go up in one
+ * PUT and large files in parts; the SDK follows the server's choice. The steps are available too, for callers that drive
+ * the bytes themselves (see `@partnrup/helios-sdk/browser` for uploads from the browser).
  *
  * @example
- * const { uploadKey, request } = await helios.uploads.uploadAndEncode("./clip.mp4", { preset: "generic" });
+ * const { file } = await helios.uploads.upload("./logo.png", { contentType: "image/png", store: true });
  */
 export class Uploads {
 	private readonly api: UploadApi;
 
 	/**
 	 * @param transport Shared HTTP transport.
-	 * @param encodes Encode resource, used by {@link uploadAndEncode}.
 	 * @internal
 	 */
-	constructor(
-		private readonly transport: Transport,
-		private readonly encodes: Encodes
-	) {
+	constructor(private readonly transport: Transport) {
 		this.api = {
-			presign: (request, signal) => this.presign(request, { signal }),
-			createMultipart: (request, signal) => this.createMultipart(request, { signal }),
-			completeMultipart: (uploadId, request, signal) => this.completeMultipart(uploadId, request, { signal }),
-			abortMultipart: (uploadId, uploadKey) => this.abortMultipart(uploadId, uploadKey),
+			create: (request, signal) => this.create(request, { signal }),
+			complete: (fileId, request, signal) => this.complete(fileId, request, { signal }),
+			abort: (fileId) => this.abort(fileId),
 			putObject: (url, body, options) => transport.put(url, body, options)
 		};
 	}
 
 	/**
-	 * Uploads a file, Buffer, stream or Blob and returns its upload key.
+	 * Uploads a file and keeps it (`store: true`) or stores it and encodes it (`encode`).
 	 *
-	 * Inputs up to `multipartThresholdBytes` (default 100 MiB) use one presigned PUT. Larger inputs use multipart upload:
-	 * parts are sent with bounded concurrency and per-part retries, and the upload is aborted on the server if any part
-	 * fails or the signal fires.
+	 * Storage checks the bytes against the declared content type and the upload policy. A file that fails the check is
+	 * rejected and its object deleted. Calling again with the same `fileId` is safe: a completed file is returned as it is.
 	 *
-	 * @param input File path, Buffer, readable stream or Blob. Streams need `sizeBytes`; Buffers, streams and Blobs need `filename`.
-	 * @param options Filename, content type, progress, cancellation and sizing.
-	 * @returns The upload key, to pass as `source: { uploadKey }` to `encodes.create`.
-	 * @throws {ValidationError} When a required filename or size is missing.
-	 * @throws {ConfigurationError} When a sizing option is out of range.
+	 * @param input File path, Buffer, readable stream or Blob.
+	 * @param options Content type, filename, progress, cancellation and the target: `{ store: true }` or `{ encode }`.
+	 * @returns The stored file, and the encode request when `encode` was given.
+	 * @throws {ValidationError} When a filename, size or option is invalid (400).
+	 * @throws {UnprocessableError} When the file violates the upload policy (422, code `policy_violation`).
 	 * @throws {UploadError} When storage rejects a part or the size does not match.
 	 * @throws {AbortedError} When `options.signal` fires.
 	 * @example
-	 * const uploadKey = await helios.uploads.upload("./master.mov", { onProgress: ({ uploadedBytes, totalBytes }) => {} });
+	 * const { file, request } = await helios.uploads.upload("./clip.mp4", {
+	 *   contentType: "video/mp4",
+	 *   encode: { preset: "generic" }
+	 * });
 	 */
-	upload(input: UploadInput, options: UploadOptions = {}): Promise<string> {
+	upload(input: UploadInput, options: UploadCall): Promise<CompleteUploadResponse> {
 		return storeUpload(this.api, input, options);
 	}
 
 	/**
-	 * Uploads an input and starts an encode of it in one call.
+	 * Creates an upload. Storage decides between one presigned PUT and a multipart upload, from the file size.
 	 *
-	 * The encode request carries a generated `requestId`, so retries of the encode never duplicate it. If the upload is
-	 * stored but the encode fails, the error is an {@link UploadEncodeError} that carries the `uploadKey`.
-	 *
-	 * @param input File path, Buffer, readable stream or Blob.
-	 * @param options Upload options plus encode options, such as `preset`, `postProcess` and `callbackUrl`.
-	 * @returns The upload key and the encode request.
-	 * @throws {ValidationError} When a required filename, size or encode field is invalid.
-	 * @throws {UploadEncodeError} When the upload is stored but the encode request fails. Its `uploadKey` can be encoded again.
-	 * @throws {UploadError} When storage rejects a part.
-	 * @throws {AbortedError} When `options.signal` fires.
-	 * @example
-	 * const { request } = await helios.uploads.uploadAndEncode("./clip.mp4", { preset: "generic" });
-	 */
-	async uploadAndEncode(input: UploadInput, options: UploadAndEncodeOptions): Promise<UploadAndEncodeResult> {
-		const {
-			filename,
-			sizeBytes,
-			contentType,
-			onProgress,
-			signal,
-			concurrency,
-			multipartThresholdBytes,
-			partTimeoutMs,
-			...encode
-		} = options;
-		const uploadKey = await storeUpload(this.api, input, options);
-		try {
-			const request = await this.encodes.create({ ...encode, source: { uploadKey } }, { signal });
-			return { uploadKey, request };
-		} catch (err) {
-			if (err instanceof AbortedError || !(err instanceof HeliosError)) {
-				throw err;
-			}
-			throw new UploadEncodeError(uploadKey, err);
-		}
-	}
-
-	/**
-	 * Gets one presigned URL for a single PUT of up to 5 GB.
-	 *
-	 * @param request Filename, byte size and optional content type.
+	 * @param request Filename, byte size, content type and optional externalId and narrower policy.
 	 * @param options Cancellation.
-	 * @returns The upload key and the presigned URL, which expires at `expiresAt`.
-	 * @throws {ValidationError} When the size exceeds the upload limit (400).
+	 * @returns The file id, the storage key and either one presigned PUT (`mode: "single"`) or the part URLs (`mode: "multipart"`).
+	 * @throws {ValidationError} When the size exceeds the upload limit or the request is invalid (400).
+	 * @throws {UnprocessableError} When the content type or size is not allowed by the upload policy (422).
 	 * @example
-	 * const { url, uploadKey } = await helios.uploads.presign({ filename: "a.jpg", sizeBytes: 1024 });
+	 * const created = await helios.uploads.create({ filename: "clip.mp4", sizeBytes, contentType: "video/mp4" });
 	 */
-	presign(request: PresignedUploadRequest, options: UploadCallOptions = {}): Promise<PresignedUploadResponse> {
-		return this.transport.json<PresignedUploadResponse>({
+	create(request: CreateUploadRequest, options: UploadCallOptions = {}): Promise<CreateUploadResponse> {
+		return this.transport.json<CreateUploadResponse>({
 			method: "POST",
-			path: "/uploads/presigned",
+			path: "/uploads",
 			body: request,
 			retry: "rateLimitOnly",
 			signal: options.signal
@@ -148,127 +87,91 @@ export class Uploads {
 	}
 
 	/**
-	 * Starts a multipart upload and returns presigned URLs for every part.
+	 * Completes an upload. Multipart uploads pass their uploaded parts. `store: true` keeps the file; `encode` stores it and
+	 * starts an encode with the file as its source.
 	 *
-	 * The part URLs stay valid for `UPLOAD_URL_EXPIRY_SEC` on the server, which is at least six hours. When URLs expire
-	 * sooner or are lost, use {@link signParts} to get fresh ones.
+	 * Completing is idempotent per file: a second call returns the stored file, and an encode without `requestId` reuses
+	 * the request of the first call. Storage re-checks the bytes here, so a policy violation is reported by this call.
 	 *
-	 * @param request Filename, total byte size and optional content type.
+	 * @param fileId File id from {@link create}.
+	 * @param request Uploaded parts (multipart only) and the target.
 	 * @param options Cancellation.
-	 * @returns The upload id, the upload key, the part size and one presigned URL per part.
-	 * @throws {ValidationError} When the size exceeds the upload limit or needs parts larger than 5 GiB (400).
+	 * @returns The stored file, and the encode request when `encode` was given.
+	 * @throws {ValidationError} When parts are missing or given for a single PUT (400).
+	 * @throws {NotFoundError} When the file does not exist (404).
+	 * @throws {ConflictError} When the file failed or was aborted (409).
+	 * @throws {UnprocessableError} When the object is missing or violates the policy (422).
 	 * @example
-	 * const { uploadId, parts, partSizeBytes } = await helios.uploads.createMultipart({ filename, sizeBytes });
+	 * const { file } = await helios.uploads.complete(created.fileId, { store: true });
 	 */
-	createMultipart(request: MultipartCreateRequest, options: UploadCallOptions = {}): Promise<MultipartCreateResponse> {
-		return this.transport.json<MultipartCreateResponse>({
+	complete(
+		fileId: string,
+		request: CompleteUploadRequest,
+		options: UploadCallOptions = {}
+	): Promise<CompleteUploadResponse> {
+		return this.transport.json<CompleteUploadResponse>({
 			method: "POST",
-			path: "/uploads/multipart",
+			path: `/uploads/${encodeURIComponent(fileId)}/complete`,
 			body: request,
-			retry: "rateLimitOnly",
+			retry: "idempotent",
 			signal: options.signal
 		});
 	}
 
 	/**
-	 * Presigns fresh PUT URLs for some parts of a multipart upload, such as after URLs expired or were lost in the browser.
+	 * Presigns fresh PUT URLs for some parts of a multipart upload, such as after URLs expired.
 	 *
-	 * Presigning has no side effects, so the call is retried on rate limits, 5xx responses and network errors. Part numbers
-	 * are checked for range and uniqueness; the server does not check them against the planned part count.
-	 *
-	 * @param uploadId Upload id from {@link createMultipart}.
-	 * @param uploadKey Upload key from {@link createMultipart}.
-	 * @param partNumbers Unique 1-based part numbers, from 1 to 10000, at most 1000 per call.
+	 * @param fileId File id from {@link create}.
+	 * @param partNumbers Unique 1-based part numbers, at most 1000 per call and within the planned part count.
 	 * @param options Cancellation.
 	 * @returns One fresh presigned URL per part number, and when they expire.
-	 * @throws {ValidationError} When a part number is out of range or repeated, or there are more than 1000 (400).
-	 * @throws {PermissionError} When the upload key belongs to another account (403).
+	 * @throws {ValidationError} When a part number is out of range or the upload is not multipart (400).
+	 * @throws {ConflictError} When the file is no longer pending (409).
 	 * @example
-	 * const { parts } = await helios.uploads.signParts(uploadId, uploadKey, [3, 4]);
+	 * const { parts } = await helios.uploads.signParts(created.fileId, [3, 4]);
 	 */
-	signParts(
-		uploadId: string,
-		uploadKey: string,
-		partNumbers: number[],
-		options: UploadCallOptions = {}
-	): Promise<MultipartSignPartsResponse> {
-		return this.transport.json<MultipartSignPartsResponse>({
+	signParts(fileId: string, partNumbers: number[], options: UploadCallOptions = {}): Promise<SignUploadPartsResponse> {
+		return this.transport.json<SignUploadPartsResponse>({
 			method: "POST",
-			path: `/uploads/multipart/${encodeURIComponent(uploadId)}/parts`,
-			body: { uploadKey, partNumbers },
+			path: `/uploads/${encodeURIComponent(fileId)}/parts`,
+			body: { partNumbers },
 			retry: "idempotent",
 			signal: options.signal
 		});
 	}
 
 	/**
-	 * Lists the parts that storage holds for a multipart upload, so an interrupted upload can resume without re-sending them.
+	 * Lists the parts storage holds for a multipart upload, so an interrupted upload can resume without re-sending them.
 	 *
-	 * The call is read-only and is retried on rate limits, 5xx responses and network errors.
-	 *
-	 * @param uploadId Upload id from {@link createMultipart}.
-	 * @param uploadKey Upload key from {@link createMultipart}.
+	 * @param fileId File id from {@link create}.
 	 * @param options Cancellation.
 	 * @returns The uploaded parts, sorted by part number, with their ETags and sizes.
-	 * @throws {PermissionError} When the upload key belongs to another account (403).
+	 * @throws {ConflictError} When the file is no longer pending (409).
 	 * @example
-	 * const { parts } = await helios.uploads.listParts(uploadId, uploadKey);
+	 * const { parts } = await helios.uploads.listParts(created.fileId);
 	 */
-	listParts(uploadId: string, uploadKey: string, options: UploadCallOptions = {}): Promise<MultipartListPartsResponse> {
-		return this.transport.json<MultipartListPartsResponse>({
+	listParts(fileId: string, options: UploadCallOptions = {}): Promise<UploadPartsListResponse> {
+		return this.transport.json<UploadPartsListResponse>({
 			method: "GET",
-			path: `/uploads/multipart/${encodeURIComponent(uploadId)}/parts`,
-			query: { uploadKey },
+			path: `/uploads/${encodeURIComponent(fileId)}/parts`,
 			retry: "idempotent",
 			signal: options.signal
 		});
 	}
 
 	/**
-	 * Completes a multipart upload from the ETags of its uploaded parts.
+	 * Aborts a pending upload and discards what it stored.
 	 *
-	 * With `encode` options, the encode request gets a generated `requestId`, so the call is retried safely. Without them,
-	 * the call is retried only on rate limits.
-	 *
-	 * @param uploadId Upload id from {@link createMultipart}.
-	 * @param request The upload key, the uploaded parts and optional encode options.
-	 * @param options Cancellation.
-	 * @returns The completed upload key, and the request when encode options were given.
-	 * @throws {ValidationError} When the parts are invalid (400).
-	 * @throws {PermissionError} When the upload key belongs to another account (403).
-	 * @example
-	 * await helios.uploads.completeMultipart(uploadId, { uploadKey, parts: [{ partNumber: 1, etag }] });
-	 */
-	completeMultipart(
-		uploadId: string,
-		request: MultipartCompleteRequest,
-		options: UploadCallOptions = {}
-	): Promise<MultipartCompleteResponse> {
-		const body = request.encode === undefined ? request : { ...request, encode: withIdempotencyKey(request.encode) };
-		return this.transport.json<MultipartCompleteResponse>({
-			method: "POST",
-			path: `/uploads/multipart/${encodeURIComponent(uploadId)}/complete`,
-			body,
-			retry: request.encode === undefined ? "rateLimitOnly" : "idempotent",
-			signal: options.signal
-		});
-	}
-
-	/**
-	 * Aborts a multipart upload and discards its uploaded parts.
-	 *
-	 * @param uploadId Upload id from {@link createMultipart}.
-	 * @param uploadKey Upload key from {@link createMultipart}.
+	 * @param fileId File id from {@link create}.
 	 * @returns Resolves once the upload is aborted (HTTP 204).
-	 * @throws {PermissionError} When the upload key belongs to another account (403).
+	 * @throws {ConflictError} When the file is no longer pending (409).
 	 * @example
-	 * await helios.uploads.abortMultipart(uploadId, uploadKey);
+	 * await helios.uploads.abort(created.fileId);
 	 */
-	abortMultipart(uploadId: string, uploadKey: string): Promise<void> {
+	abort(fileId: string): Promise<void> {
 		return this.transport.json<void>({
 			method: "DELETE",
-			path: `/uploads/multipart/${encodeURIComponent(uploadId)}`,
-			query: { uploadKey },
+			path: `/uploads/${encodeURIComponent(fileId)}`,
 			retry: "idempotent"
 		});
 	}

@@ -1,3 +1,4 @@
+export { upload } from "./upload.js";
 export { uploadParts } from "./uploadParts.js";
 export { uploadSingle } from "./uploadSingle.js";
 export {
@@ -8,6 +9,10 @@ export {
 	type BrowserErrorInit
 } from "./errors.js";
 export type {
+	BrowserUpload,
+	BrowserUploadResult,
+	MultipartBrowserUpload,
+	SingleBrowserUpload,
 	CompletedPart,
 	MultipartUpload,
 	PartUrl,

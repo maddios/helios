@@ -2,7 +2,9 @@ import {
 	CreateBucketCommand,
 	HeadBucketCommand,
 	PutBucketCorsCommand,
+	PutBucketLifecycleConfigurationCommand,
 	S3Client,
+	type BucketLifecycleConfiguration,
 	type BucketLocationConstraint,
 	type CORSConfiguration
 } from "@aws-sdk/client-s3";
@@ -97,9 +99,33 @@ export async function bootstrap(
 		})
 	);
 	result.updated.push(`${local.mediaBucket} CORS`);
+	await s3.send(
+		new PutBucketLifecycleConfigurationCommand({
+			Bucket: local.mediaBucket,
+			LifecycleConfiguration: mediaLifecycleConfiguration()
+		})
+	);
+	result.updated.push(`${local.mediaBucket} lifecycle`);
 	const eventbridge = new EventBridgeClient({ region: local.awsRegion, endpoint: local.awsEndpoint });
 	await ensureEventCapture(eventbridge, sqs, local, result, visibilityTimeout);
 	return result;
+}
+
+/**
+ * Lifecycle of the media bucket: an upload that never completes is aborted after a week, so its parts stop costing money.
+ * The infra template (`infra/media.yml`) carries the same rule.
+ */
+export function mediaLifecycleConfiguration(): BucketLifecycleConfiguration {
+	return {
+		Rules: [
+			{
+				ID: "abort-incomplete-multipart-uploads",
+				Status: "Enabled",
+				Filter: { Prefix: "" },
+				AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+			}
+		]
+	};
 }
 
 /**

@@ -3,17 +3,20 @@ import { putBlob } from "./xhr.js";
 import type { PresignedUpload, UploadSingleOptions } from "./types.js";
 
 /**
- * Uploads a file with one presigned PUT, from the browser, for files small enough for `uploads.presign`.
+ * Uploads a file with one presigned PUT, from the browser. Use it for the `mode: "single"` result of `uploads.create`.
  *
- * @param presigned The presigned URL and any headers the signature covers.
+ * The request sends `presigned.headers` exactly. Those are the headers the server signed, so they must come from
+ * `uploads.create` unchanged. The browser sets `Content-Length` itself, and the signature covers it.
+ *
+ * @param presigned The presigned URL and the headers the signature covers, from `uploads.create`.
  * @param file The file to upload.
  * @param options Progress and cancellation.
  * @returns Resolves once storage accepts the file.
  * @throws {BrowserUploadError} With code `upload_failed` when storage rejects the file, with its HTTP status.
  * @throws {BrowserUploadError} With code `aborted` when the signal fires.
  * @example
- * const { url } = await fetch("/api/uploads/presign", { method: "POST" }).then((r) => r.json());
- * await uploadSingle({ url, headers: { "content-type": file.type } }, file);
+ * const created = await fetch("/api/uploads", { method: "POST", body }).then((r) => r.json());
+ * await uploadSingle(created, file);
  */
 export async function uploadSingle(
 	presigned: PresignedUpload,
@@ -23,7 +26,7 @@ export async function uploadSingle(
 	const response = await putBlob({
 		url: presigned.url,
 		body: file,
-		headers: presigned.headers ?? {},
+		headers: presigned.headers,
 		onUploadProgress: (loadedBytes) => options.onProgress?.({ uploadedBytes: loadedBytes, totalBytes: file.size }),
 		signal: options.signal
 	});

@@ -33,6 +33,7 @@ import { bootstrap } from "../bootstrap";
 import { FIXTURE_DIR, generateFixtures } from "../fixtures";
 import { loadLocalConfig } from "../loadConfig";
 import { drainOnce } from "./drain";
+import { storeFile } from "./storeFile";
 
 const local = loadLocalConfig();
 const DEADLINE_MS = 180000;
@@ -172,23 +173,19 @@ describe("Helios API against LocalStack and Mongo", () => {
 	});
 
 	it(
-		"uploads a fixture through a presigned PUT and encodes it synchronously (201)",
+		"stores a fixture through the upload flow and encodes the stored file synchronously (201)",
 		async () => {
 			const body = fs.readFileSync(path.join(FIXTURE_DIR, FIXTURE));
-			const presigned = await account("POST", "/uploads/presigned", {
-				filename: FIXTURE,
-				sizeBytes: body.length
-			});
-			const put = await fetch(presigned.body?.url, { method: "PUT", body });
+			const stored = await storeFile(account, body, FIXTURE, "video/mp4");
 
 			const sync = await account("POST", "/encode", {
-				source: { uploadKey: presigned.body?.uploadKey },
+				source: { fileId: stored.file.id },
 				preset: "generic",
 				postProcess: POST_PROCESS_OFF,
 				analyze: "sync"
 			});
 
-			expect(put.status).toBe(200);
+			expect(stored.file.status).toBe("STORED");
 			expect(sync.status).toBe(201);
 			expect(sync.body).toMatchObject({ mode: "encode", status: "IN_PROGRESS" });
 			expect(sync.body?.items.length).toBeGreaterThan(0);

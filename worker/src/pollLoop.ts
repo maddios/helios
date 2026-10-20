@@ -1,14 +1,8 @@
 import type { QueueName } from "@helios/contracts";
-import {
-	contextLogger,
-	FARGATE_QUEUE_NAMES,
-	queueFor,
-	type ItemMessage,
-	type Queue,
-	type ReceivedMessage
-} from "@helios/core";
+import { contextLogger, FARGATE_QUEUE_NAMES, queueFor, type Queue, type ReceivedMessage } from "@helios/core";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fargateConfig } from "./config";
+import { runFileIngest, isFileIngest, type WorkerMessage } from "./fileIngest";
 import { processItem, type ItemOutcome } from "./processItem";
 
 export const WORKER_QUEUES = FARGATE_QUEUE_NAMES;
@@ -61,7 +55,7 @@ async function pollOnce(signal: AbortSignal): Promise<boolean> {
 		if (signal.aborted) {
 			return false;
 		}
-		const queue = queueFor<ItemMessage>(step.queue);
+		const queue = queueFor<WorkerMessage>(step.queue);
 		const [message] = await queue.poll(1, step.waitSec, undefined, signal);
 		if (message !== undefined) {
 			await processMessage(queue, message, signal);
@@ -72,11 +66,13 @@ async function pollOnce(signal: AbortSignal): Promise<boolean> {
 }
 
 export async function processMessage(
-	queue: Queue<ItemMessage>,
-	message: ReceivedMessage<ItemMessage>,
+	queue: Queue<WorkerMessage>,
+	message: ReceivedMessage<WorkerMessage>,
 	signal: AbortSignal
 ): Promise<void> {
-	const outcome = await runItem(queue, message, signal);
+	const outcome = isFileIngest(message.body)
+		? await runFileIngest(message.body.fileId, signal)
+		: await runItem(queue, message, message.body.itemId, signal);
 	if (outcome === "done") {
 		await queue.ack(message);
 	} else if (outcome === "interrupted") {
@@ -85,28 +81,26 @@ export async function processMessage(
 }
 
 async function runItem(
-	queue: Queue<ItemMessage>,
-	message: ReceivedMessage<ItemMessage>,
+	queue: Queue<WorkerMessage>,
+	message: ReceivedMessage<WorkerMessage>,
+	itemId: string,
 	signal: AbortSignal
 ): Promise<ItemOutcome> {
 	try {
 		return await processItem({
-			itemId: message.body.itemId,
+			itemId,
 			messageId: message.id,
 			extendVisibility: (seconds) => queue.changeVisibility(message, seconds),
 			signal,
 			releaseLeaseOnAbort: true
 		});
 	} catch (err) {
-		contextLogger({ itemId: message.body.itemId }).error(
-			{ err },
-			"Item processing failed; message left for redelivery"
-		);
+		contextLogger({ itemId }).error({ err }, "Item processing failed; message left for redelivery");
 		return "redeliver";
 	}
 }
 
-async function requeue(queue: Queue<ItemMessage>, message: ReceivedMessage<ItemMessage>): Promise<void> {
+async function requeue(queue: Queue<WorkerMessage>, message: ReceivedMessage<WorkerMessage>): Promise<void> {
 	await queue.send({ body: message.body, groupId: message.groupId, attributes: message.attributes });
 	await queue.ack(message);
 }
